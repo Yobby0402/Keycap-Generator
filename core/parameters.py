@@ -2,8 +2,8 @@
 参数管理类
 定义和管理按键模型的所有参数
 """
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 
 @dataclass
@@ -48,6 +48,10 @@ class KeycapParameters:
     text_depth: float = 0.5      # 文字深度 (mm) - 正值为凹陷，负值为凸起
     text_offset_x: float = 0.0   # 文字X偏移 (mm)
     text_offset_y: float = 0.0   # 文字Y偏移 (mm)
+    
+    # 多文字支持
+    # 列表项格式: {'text': str, 'x': float, 'y': float, 'size': float, 'font': str}
+    text_items: List[Dict[str, Any]] = field(default_factory=list)
     
     # 圆角参数 (mm)
     corner_radius: float = 0.5   # 圆角半径

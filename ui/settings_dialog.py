@@ -45,6 +45,17 @@ class SettingsDialog(QDialog):
         snap_group.setLayout(snap_layout)
         layout.addWidget(snap_group)
         
+        # 性能设置组
+        perf_group = QGroupBox("性能设置")
+        perf_layout = QVBoxLayout()
+        
+        self.auto_update_checkbox = QCheckBox("开启实时刷新 (修改参数或拖动时自动重新计算模型)")
+        self.auto_update_checkbox.setToolTip("开启后，修改参数或拖动文字结束后会自动重新生成模型。\n警告：复杂模型可能会导致卡顿。")
+        perf_layout.addWidget(self.auto_update_checkbox)
+        
+        perf_group.setLayout(perf_layout)
+        layout.addWidget(perf_group)
+        
         # 按钮
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -63,11 +74,13 @@ class SettingsDialog(QDialog):
         """加载设置"""
         self.snap_checkbox.setChecked(self.settings.get_snap_enabled())
         self.grid_spin.setValue(self.settings.get_snap_grid_size())
+        self.auto_update_checkbox.setChecked(self.settings.get_auto_update())
     
     def save_settings(self):
         """保存设置"""
         self.settings.set_snap_enabled(self.snap_checkbox.isChecked())
         self.settings.set_snap_grid_size(self.grid_spin.value())
+        self.settings.set_auto_update(self.auto_update_checkbox.isChecked())
     
     def accept(self):
         """确定按钮"""

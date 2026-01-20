@@ -318,7 +318,7 @@ class ParameterPanel(QWidget):
         """加载系统字体"""
         try:
             fonts = get_system_fonts()
-            for font_path in fonts[:100]:  # 限制显示前100个字体
+            for font_path in fonts:  # 加载所有字体
                 font_name = get_font_name(font_path)
                 self.font_combo.addItem(font_name, font_path)
         except Exception as e:
@@ -428,9 +428,8 @@ class ParameterPanel(QWidget):
         self.depth_spin.setValue(height)
         self.on_parameter_changed()
     
-    def on_parameter_changed(self):
-        """参数改变时的处理"""
-        # 更新参数对象
+    def _update_params_from_ui(self):
+        """从UI更新参数（内部使用，不发信号）"""
         if not self.params.use_u_units:
             self.params.key_width = self.width_spin.value()
             self.params.key_height = self.height_spin.value()
@@ -449,7 +448,10 @@ class ParameterPanel(QWidget):
         self.params.stem_cross_width = self.stem_cross_width_spin.value()
         self.params.height_profile = self.height_profile_combo.currentText()
         self.params.keycap_row = self.row_combo.currentText()
-        
+
+    def on_parameter_changed(self, *args):
+        """参数改变时的处理"""
+        self._update_params_from_ui()
         # 发出信号
         self.parameters_changed.emit(self.params)
     
@@ -461,5 +463,5 @@ class ParameterPanel(QWidget):
     
     def get_parameters(self) -> KeycapParameters:
         """获取当前参数"""
-        self.on_parameter_changed()
+        self._update_params_from_ui()
         return self.params

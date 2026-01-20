@@ -53,20 +53,51 @@ def get_system_fonts() -> list[str]:
 
 
 def get_font_name(font_path: str) -> str:
-    """从字体文件路径提取字体名称"""
+    """从字体文件路径提取字体名称 (优化版)"""
     try:
         from fontTools.ttLib import TTFont
         
         font = TTFont(font_path)
-        name_table = font.get('name')
+        name_table = font['name']
         
-        # 尝试获取字体族名称
-        for name_id in [1, 4, 6]:  # Family, Full name, PostScript name
-            names = name_table.getDebugName(name_id)
-            if names:
-                return names
+        # 候选列表
+        candidates = []
+        
+        for record in name_table.names:
+            # 仅关注 Family Name (1) 和 Preferred Family (16)
+            if record.nameID not in [1, 16]:
+                continue
+                
+            # 计算优先级分数
+            score = 0
+            # 优先 Preferred Family (16)
+            if record.nameID == 16:
+                score += 100
+            # 优先 Family (1)
+            elif record.nameID == 1:
+                score += 50
+                
+            # 优先 Windows 平台 (3)
+            if record.platformID == 3:
+                score += 20
+            
+            # 优先 英语 (1033/0x409)
+            if record.langID == 0x409:
+                score += 10
+            
+            try:
+                text = record.toUnicode()
+                candidates.append((score, text))
+            except:
+                continue
+                
+        if candidates:
+            # 按分数降序
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            return candidates[0][1]
         
         # 如果获取不到，使用文件名
         return os.path.splitext(os.path.basename(font_path))[0]
     except Exception:
+        # Fallback
         return os.path.splitext(os.path.basename(font_path))[0]

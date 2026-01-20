@@ -38,7 +38,7 @@ def export_keycap_and_text(keycap_model: cq.Workplane,
                            text_model: cq.Workplane,
                            base_path: str) -> tuple[bool, bool]:
     """
-    分别导出按键和文字模型
+    分别导出按键和文字模型（为了多色打印，必须保持为两个独立文件）
     
     参数:
         keycap_model: 按键模型

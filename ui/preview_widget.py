@@ -64,6 +64,18 @@ class PreviewWidget(QWidget):
         self.renderer.ResetCamera()
         self.vtk_widget.GetRenderWindow().Render()
     
+    def update_text_offset(self, dx: float, dy: float):
+        """
+        更新文字模型的显示偏移（不需要重新生成）
+        
+        参数:
+            dx: X轴偏移增量 (相对于生成时的位置)
+            dy: Y轴偏移增量
+        """
+        if self.text_actor:
+            self.text_actor.SetPosition(dx, dy, 0)
+            self.vtk_widget.GetRenderWindow().Render()
+    
     def update_model(self, keycap_model: cq.Workplane = None, 
                      text_model: cq.Workplane = None):
         """

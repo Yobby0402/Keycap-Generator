@@ -69,3 +69,11 @@ class Settings:
     def set_snap_grid_size(self, size: float):
         """设置对齐网格大小"""
         self.set("snap_grid_size", size)
+
+    def get_auto_update(self) -> bool:
+        """获取自动更新是否启用"""
+        return self.get("auto_update", False)
+
+    def set_auto_update(self, enabled: bool):
+        """设置自动更新是否启用"""
+        self.set("auto_update", enabled)

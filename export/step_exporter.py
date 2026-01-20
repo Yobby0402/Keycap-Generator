@@ -38,14 +38,6 @@ def export_keycap_and_text(keycap_model: cq.Workplane,
                            base_path: str) -> tuple[bool, bool]:
     """
     分别导出按键和文字模型
-    
-    参数:
-        keycap_model: 按键模型
-        text_model: 文字模型
-        base_path: 基础路径（不含扩展名）
-    
-    返回:
-        (按键导出是否成功, 文字导出是否成功)
     """
     keycap_path = f"{base_path}_keycap.step"
     text_path = f"{base_path}_text.step"

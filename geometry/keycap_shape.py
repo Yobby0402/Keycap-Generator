@@ -208,8 +208,8 @@ class KeycapShape:
         # 注意：连接器空腔在Z=0到Z=-stem_height，应该与键帽的底部（Z=0）连接
         try:
             # 检查键帽是否有实体
-            # 如果键帽是空的，可能无法进行cut操作
-            keycap = keycap.cut(stem_cavity)
+            # 使用union将连接器添加到键帽内部
+            keycap = keycap.union(stem_cavity)
             print(f"连接器已添加到键帽（位置Z={stem_start_z}到Z={stem_start_z - stem_height}）")
         except Exception as e:
             print(f"从键帽中减去连接器空腔时出错: {e}")
@@ -236,17 +236,26 @@ class KeycapShape:
         
         print(f"创建Alps连接器：位置Z={stem_start_z}, 深度={stem_height}mm, 尺寸={stem_width}x{stem_length}mm")
         
-        # 创建矩形空腔（从Z=0向下延伸到Z=-stem_height）
-        stem_cavity = (cq.Workplane("XY")
-                      .workplane(offset=stem_start_z)  # 从顶面底部（Z=0）开始
+        # 创建支撑圆柱（与MX相同，但中间是矩形孔）
+        cylinder_diameter = self.params.stem_cylinder_diameter
+        
+        # 创建圆柱形外壳
+        cylinder = (cq.Workplane("XY")
+                    .workplane(offset=stem_start_z)
+                    .circle(cylinder_diameter / 2)
+                    .extrude(-stem_height))
+
+        # 创建矩形空腔
+        stem_hole = (cq.Workplane("XY")
+                      .workplane(offset=stem_start_z)
                       .rect(stem_width, stem_length)
-                      .extrude(-stem_height))  # 向下延伸到Z=-stem_height
+                      .extrude(-stem_height))
         
-        print(f"Alps连接器空腔创建完成：从Z={stem_start_z}到Z={stem_start_z - stem_height}")
-        
-        # 从键帽中减去连接器空腔
+        # 创建带孔的连接器
         try:
-            keycap = keycap.cut(stem_cavity)
+            stem = cylinder.cut(stem_hole)
+            # 添加到键帽
+            keycap = keycap.union(stem)
             print("Alps连接器已添加到键帽")
         except Exception as e:
             print(f"从键帽中减去Alps连接器空腔时出错: {e}")
