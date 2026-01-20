@@ -119,17 +119,18 @@ class KeycapShape:
         cross_length = self.params.stem_cross_length
         cylinder_diameter = self.params.stem_cylinder_diameter
         
-        # 连接器位置：在顶面下方（Z=0，即顶面底部）向下延伸
-        # 注意：由于顶面在Z=0到Z=top_thickness，连接器应该在Z=0处向下延伸
-        stem_start_z = 0.0  # 顶面底部（Z=0）
+        # 连接器位置：从键帽底部（Z=0）向下延伸到键帽内部（Z=-stem_height）
+        # 关键：连接器不能影响顶面（Z=0到Z=top_thickness），只能从键帽底部向下延伸
+        stem_start_z = 0.0  # 从Z=0开始（键帽底部），确保不影响顶面
         
-        print(f"创建连接器：位置Z={stem_start_z}, 深度={stem_height}mm, 圆柱直径={cylinder_diameter}mm, 十字={cross_length}x{cross_width}mm")
+        print(f"创建MX连接器：位置Z={stem_start_z}, 深度={stem_height}mm, 圆柱直径={cylinder_diameter}mm, 十字={cross_length}x{cross_width}mm")
         
         # 创建连接器空腔
         # 方法：创建圆柱形空腔，然后从圆柱中减去十字形
         # 创建圆柱形空腔（从Z=0向下延伸到Z=-stem_height）
         cylinder = (cq.Workplane("XY")
-                    .workplane(offset=stem_start_z)  # 从顶面底部（Z=0）开始
+                    .workplane(offset=stem_start_z)  # 从Z=0开始（键帽底部）
+                    .center(0, 0)  # 确保在中心位置
                     .circle(cylinder_diameter / 2)
                     .extrude(-stem_height))  # 向下延伸到Z=-stem_height
         
@@ -205,12 +206,24 @@ class KeycapShape:
             stem_cavity = cylinder
         
         # 从键帽中减去连接器空腔
-        # 注意：连接器空腔在Z=0到Z=-stem_height，应该与键帽的底部（Z=0）连接
+        # 键帽结构：
+        # - 顶面：Z=0到Z=top_thickness（实体）
+        # - 侧面：从Z=top_thickness到Z=0（实体）
+        # - 内部空腔：从Z=top_thickness-wall_thickness到Z=0（被挖空）
+        # 键帽底部在Z=0是开口的，没有底部壁厚
+        # 连接器应该从Z=0向下延伸到Z=-stem_height，这样连接器会在键帽内部
+        # 但连接器需要与键帽的实体部分相交才能进行cut操作
+        # 问题：连接器从Z=0向下延伸到Z=-4.0，但键帽底部在Z=0是开口的，所以连接器可能在键帽外部
+        # 解决方案：连接器应该从键帽内部（Z=0）向下延伸到键帽内部（Z=-stem_height）
+        # 但需要确保与键帽的实体部分（侧面底部）相交
+        # 实际上，连接器应该从Z=0向下延伸到Z=-stem_height，这样会穿过键帽底部开口
+        # 但键帽底部是开口的，所以连接器应该在键帽内部
+        # 关键：连接器需要与键帽的侧面底部（Z=0附近）相交
         try:
-            # 检查键帽是否有实体
-            # 如果键帽是空的，可能无法进行cut操作
+            # 确保连接器空腔与键帽有交集
+            # 连接器从Z=0向下延伸到Z=-stem_height，应该与键帽的底部边缘（Z=0）相交
             keycap = keycap.cut(stem_cavity)
-            print(f"连接器已添加到键帽（位置Z={stem_start_z}到Z={stem_start_z - stem_height}）")
+            print(f"MX连接器已成功添加到键帽（位置Z={stem_start_z}到Z={stem_start_z - stem_height}）")
         except Exception as e:
             print(f"从键帽中减去连接器空腔时出错: {e}")
             print("可能的原因：键帽结构问题或连接器位置不正确")
@@ -218,6 +231,18 @@ class KeycapShape:
             traceback.print_exc()
             # 尝试调试：检查键帽和连接器的位置
             print(f"键帽范围检查：连接器在Z={stem_start_z}到Z={stem_start_z - stem_height}")
+            print(f"键帽深度：{self.params.key_depth}mm, 顶面厚度：{self.params.top_thickness}mm")
+            print(f"壁厚：{self.params.wall_thickness}mm")
+            # 如果cut失败，尝试使用intersect检查是否有交集
+            try:
+                # 检查连接器是否与键帽有交集
+                intersection = keycap.intersect(stem_cavity)
+                if intersection.val().Volume() > 0:
+                    print("连接器与键帽有交集，但cut操作失败")
+                else:
+                    print("连接器与键帽没有交集，可能需要调整位置")
+            except:
+                pass
         
         return keycap
     
@@ -226,31 +251,49 @@ class KeycapShape:
         添加Alps轴体连接结构
         Alps轴体是矩形，键帽需要有一个矩形空腔
         """
-        # Alps轴体参数
-        stem_width = 2.0  # mm
-        stem_length = 4.0  # mm
-        stem_height = self.params.stem_height  # 使用参数中的深度
+        # Alps轴体参数（从参数中获取）
+        stem_height = self.params.stem_height
+        stem_width = self.params.stem_alps_width
+        stem_length = self.params.stem_alps_length
         
-        # 连接器位置：在顶面下方（Z=0，即顶面底部）向下延伸
-        stem_start_z = 0.0  # 顶面底部（Z=0）
+        # 连接器位置：在键帽内部，从键帽底部向下延伸到键帽内部
+        # 与MX连接器相同，从Z=0开始（键帽底部），确保不影响顶面
+        stem_start_z = 0.0  # 从Z=0开始（键帽底部），确保不影响顶面
         
         print(f"创建Alps连接器：位置Z={stem_start_z}, 深度={stem_height}mm, 尺寸={stem_width}x{stem_length}mm")
         
         # 创建矩形空腔（从Z=0向下延伸到Z=-stem_height）
         stem_cavity = (cq.Workplane("XY")
-                      .workplane(offset=stem_start_z)  # 从顶面底部（Z=0）开始
+                      .workplane(offset=stem_start_z)  # 从Z=0开始（键帽底部）
+                      .center(0, 0)  # 确保在中心位置
                       .rect(stem_width, stem_length)
                       .extrude(-stem_height))  # 向下延伸到Z=-stem_height
         
         print(f"Alps连接器空腔创建完成：从Z={stem_start_z}到Z={stem_start_z - stem_height}")
         
         # 从键帽中减去连接器空腔
+        # 注意：连接器空腔在Z=0到Z=-stem_height，应该与键帽的底部（Z=0）连接
+        # 键帽占据Z=0到Z=top_thickness的空间，内部空腔从Z=top_thickness-wall_thickness到Z=0
+        # 连接器从Z=0向下延伸到Z=-stem_height，这样连接器在键帽内部（从键帽底部向下延伸）
         try:
             keycap = keycap.cut(stem_cavity)
-            print("Alps连接器已添加到键帽")
+            print(f"Alps连接器已成功添加到键帽（位置Z={stem_start_z}到Z={stem_start_z - stem_height}）")
         except Exception as e:
             print(f"从键帽中减去Alps连接器空腔时出错: {e}")
             import traceback
             traceback.print_exc()
+            print(f"键帽范围检查：连接器在Z={stem_start_z}到Z={stem_start_z - stem_height}")
+            print(f"键帽深度：{self.params.key_depth}mm, 顶面厚度：{self.params.top_thickness}mm")
+            print(f"壁厚：{self.params.wall_thickness}mm")
+            # 如果cut失败，尝试使用intersect检查是否有交集
+            try:
+                # 检查连接器是否与键帽有交集
+                intersection = keycap.intersect(stem_cavity)
+                if intersection.val().Volume() > 0:
+                    print("Alps连接器与键帽有交集，但cut操作失败")
+                else:
+                    print("Alps连接器与键帽没有交集，可能需要调整位置")
+            except:
+                pass
         
         return keycap

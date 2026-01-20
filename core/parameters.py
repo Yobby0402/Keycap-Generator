@@ -37,9 +37,13 @@ class KeycapParameters:
     # 连接器参数
     stem_enabled: bool = True    # 是否生成连接器
     stem_height: float = 4.0     # 连接器深度 (mm)
-    stem_cylinder_diameter: float = 5.4  # 圆柱直径 (mm)
-    stem_cross_width: float = 1.0  # 十字宽度 (mm)
-    stem_cross_length: float = 4.0  # 十字长度 (mm)
+    # MX类型参数
+    stem_cylinder_diameter: float = 5.4  # 圆柱直径 (mm) - 仅用于MX
+    stem_cross_width: float = 1.0  # 十字宽度 (mm) - 仅用于MX
+    stem_cross_length: float = 4.0  # 十字长度 (mm) - 仅用于MX
+    # Alps类型参数
+    stem_alps_width: float = 2.0  # Alps矩形宽度 (mm) - 仅用于Alps
+    stem_alps_length: float = 4.0  # Alps矩形长度 (mm) - 仅用于Alps
     
     # 字体和文字参数
     font_path: Optional[str] = None  # 字体文件路径

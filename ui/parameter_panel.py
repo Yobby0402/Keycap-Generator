@@ -254,11 +254,11 @@ class ParameterPanel(QWidget):
         self.stem_combo = QComboBox()
         self.stem_combo.addItems(["MX", "Alps"])
         self.stem_combo.setCurrentText("MX")
-        self.stem_combo.currentTextChanged.connect(self.on_parameter_changed)
+        self.stem_combo.currentTextChanged.connect(self.on_stem_type_changed)
         type_layout.addWidget(self.stem_combo)
         stem_layout.addLayout(type_layout)
         
-        # 连接器深度
+        # 连接器深度（所有类型共用）
         depth_layout = QHBoxLayout()
         depth_layout.addWidget(QLabel("深度:"))
         self.stem_height_spin = QDoubleSpinBox()
@@ -270,7 +270,12 @@ class ParameterPanel(QWidget):
         depth_layout.addWidget(self.stem_height_spin)
         stem_layout.addLayout(depth_layout)
         
-        # 圆柱直径
+        # MX类型参数组
+        self.mx_params_widget = QWidget()
+        mx_params_layout = QVBoxLayout(self.mx_params_widget)
+        mx_params_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 圆柱直径（仅MX）
         cylinder_layout = QHBoxLayout()
         cylinder_layout.addWidget(QLabel("圆柱直径:"))
         self.stem_cylinder_spin = QDoubleSpinBox()
@@ -280,9 +285,9 @@ class ParameterPanel(QWidget):
         self.stem_cylinder_spin.setSuffix(" mm")
         self.stem_cylinder_spin.valueChanged.connect(self.on_parameter_changed)
         cylinder_layout.addWidget(self.stem_cylinder_spin)
-        stem_layout.addLayout(cylinder_layout)
+        mx_params_layout.addLayout(cylinder_layout)
         
-        # 十字尺寸
+        # 十字尺寸（仅MX）
         cross_layout = QHBoxLayout()
         cross_layout.addWidget(QLabel("十字:"))
         self.stem_cross_length_spin = QDoubleSpinBox()
@@ -302,7 +307,42 @@ class ParameterPanel(QWidget):
         self.stem_cross_width_spin.valueChanged.connect(self.on_parameter_changed)
         cross_layout.addWidget(QLabel("宽度"))
         cross_layout.addWidget(self.stem_cross_width_spin)
-        stem_layout.addLayout(cross_layout)
+        mx_params_layout.addLayout(cross_layout)
+        
+        stem_layout.addWidget(self.mx_params_widget)
+        
+        # Alps类型参数组
+        self.alps_params_widget = QWidget()
+        alps_params_layout = QVBoxLayout(self.alps_params_widget)
+        alps_params_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Alps矩形尺寸（仅Alps）
+        alps_size_layout = QHBoxLayout()
+        alps_size_layout.addWidget(QLabel("矩形尺寸:"))
+        self.stem_alps_width_spin = QDoubleSpinBox()
+        self.stem_alps_width_spin.setRange(1.0, 5.0)
+        self.stem_alps_width_spin.setValue(2.0)
+        self.stem_alps_width_spin.setDecimals(1)
+        self.stem_alps_width_spin.setSuffix(" mm")
+        self.stem_alps_width_spin.valueChanged.connect(self.on_parameter_changed)
+        alps_size_layout.addWidget(QLabel("宽度"))
+        alps_size_layout.addWidget(self.stem_alps_width_spin)
+        
+        self.stem_alps_length_spin = QDoubleSpinBox()
+        self.stem_alps_length_spin.setRange(2.0, 8.0)
+        self.stem_alps_length_spin.setValue(4.0)
+        self.stem_alps_length_spin.setDecimals(1)
+        self.stem_alps_length_spin.setSuffix(" mm")
+        self.stem_alps_length_spin.valueChanged.connect(self.on_parameter_changed)
+        alps_size_layout.addWidget(QLabel("长度"))
+        alps_size_layout.addWidget(self.stem_alps_length_spin)
+        alps_params_layout.addLayout(alps_size_layout)
+        
+        stem_layout.addWidget(self.alps_params_widget)
+        
+        # 初始状态：显示MX参数，隐藏Alps参数
+        self.mx_params_widget.setVisible(True)
+        self.alps_params_widget.setVisible(False)
         
         stem_group.setLayout(stem_layout)
         layout.addWidget(stem_group)
@@ -428,6 +468,19 @@ class ParameterPanel(QWidget):
         self.depth_spin.setValue(height)
         self.on_parameter_changed()
     
+    def on_stem_type_changed(self, stem_type: str):
+        """连接器类型改变时的处理"""
+        # 根据类型显示/隐藏相应的参数控件
+        if stem_type == "MX":
+            self.mx_params_widget.setVisible(True)
+            self.alps_params_widget.setVisible(False)
+        elif stem_type == "Alps":
+            self.mx_params_widget.setVisible(False)
+            self.alps_params_widget.setVisible(True)
+        
+        # 更新参数并发出信号
+        self.on_parameter_changed()
+    
     def on_parameter_changed(self):
         """参数改变时的处理"""
         # 更新参数对象
@@ -444,9 +497,16 @@ class ParameterPanel(QWidget):
         self.params.stem_type = self.stem_combo.currentText()
         self.params.stem_enabled = self.stem_enabled_checkbox.isChecked()
         self.params.stem_height = self.stem_height_spin.value()
+        
+        # MX类型参数
         self.params.stem_cylinder_diameter = self.stem_cylinder_spin.value()
         self.params.stem_cross_length = self.stem_cross_length_spin.value()
         self.params.stem_cross_width = self.stem_cross_width_spin.value()
+        
+        # Alps类型参数
+        self.params.stem_alps_width = self.stem_alps_width_spin.value()
+        self.params.stem_alps_length = self.stem_alps_length_spin.value()
+        
         self.params.height_profile = self.height_profile_combo.currentText()
         self.params.keycap_row = self.row_combo.currentText()
         
