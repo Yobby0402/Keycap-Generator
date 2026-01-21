@@ -34,6 +34,16 @@ class Settings:
                 "default_key_size": "1u",
                 "default_height_profile": "Cherry高度",
                 "default_row": "R3",
+                # 默认按键参数
+                "default_side_angle": 0.0,
+                "default_edge_profile_mode": "fillet",
+                "default_edge_profile_radius": 0.0,
+                "default_edge_profile_outer": True,
+                "default_edge_profile_inner": False,
+                "default_edge_profile_left": True,
+                "default_edge_profile_right": True,
+                "default_edge_profile_top": True,
+                "default_edge_profile_bottom": True,
             }
             self.save()
     
@@ -77,3 +87,86 @@ class Settings:
     def set_auto_update(self, enabled: bool):
         """设置自动更新是否启用"""
         self.set("auto_update", enabled)
+    
+    # 默认参数相关方法
+    def get_default_side_angle(self) -> float:
+        """获取默认侧面斜角"""
+        return self.get("default_side_angle", 0.0)
+    
+    def set_default_side_angle(self, angle: float):
+        """设置默认侧面斜角"""
+        self.set("default_side_angle", angle)
+    
+    def get_default_edge_profile_mode(self) -> str:
+        """获取默认边缘形状类型"""
+        return self.get("default_edge_profile_mode", "fillet")
+
+    def set_default_edge_profile_mode(self, mode: str):
+        """设置默认边缘形状类型"""
+        self.set("default_edge_profile_mode", mode)
+
+    def get_default_edge_profile_radius(self) -> float:
+        """获取默认边缘半径"""
+        return self.get("default_edge_profile_radius", 0.0)
+
+    def set_default_edge_profile_radius(self, radius: float):
+        """设置默认边缘半径"""
+        self.set("default_edge_profile_radius", radius)
+
+    def get_default_edge_profile_outer(self) -> bool:
+        """获取默认外侧边缘是否生效"""
+        return self.get("default_edge_profile_outer", True)
+
+    def set_default_edge_profile_outer(self, enabled: bool):
+        """设置默认外侧边缘是否生效"""
+        self.set("default_edge_profile_outer", enabled)
+
+    def get_default_edge_profile_inner(self) -> bool:
+        """获取默认内侧边缘是否生效"""
+        return self.get("default_edge_profile_inner", False)
+
+    def set_default_edge_profile_inner(self, enabled: bool):
+        """设置默认内侧边缘是否生效"""
+        self.set("default_edge_profile_inner", enabled)
+
+    def get_default_edge_profile_left(self) -> bool:
+        """获取默认左边是否生效"""
+        return self.get("default_edge_profile_left", True)
+
+    def set_default_edge_profile_left(self, enabled: bool):
+        """设置默认左边是否生效"""
+        self.set("default_edge_profile_left", enabled)
+
+    def get_default_edge_profile_right(self) -> bool:
+        """获取默认右边是否生效"""
+        return self.get("default_edge_profile_right", True)
+
+    def set_default_edge_profile_right(self, enabled: bool):
+        """设置默认右边是否生效"""
+        self.set("default_edge_profile_right", enabled)
+
+    def get_default_edge_profile_top(self) -> bool:
+        """获取默认上边是否生效"""
+        return self.get("default_edge_profile_top", True)
+
+    def set_default_edge_profile_top(self, enabled: bool):
+        """设置默认上边是否生效"""
+        self.set("default_edge_profile_top", enabled)
+
+    def get_default_edge_profile_bottom(self) -> bool:
+        """获取默认下边是否生效"""
+        return self.get("default_edge_profile_bottom", True)
+
+    def set_default_edge_profile_bottom(self, enabled: bool):
+        """设置默认下边是否生效"""
+        self.set("default_edge_profile_bottom", enabled)
+    
+    # 旧圆角默认参数已移除（改为边缘形状设置）
+    
+    def get_default_font_path(self) -> str:
+        """获取默认字体路径"""
+        return self.get("default_font_path", None)
+    
+    def set_default_font_path(self, font_path: str):
+        """设置默认字体路径"""
+        self.set("default_font_path", font_path)

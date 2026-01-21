@@ -7,7 +7,7 @@ from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 import numpy as np
 from geometry.font_processor import extract_glyph_outline, scale_and_center_geometry
-from core.parameters import KeycapParameters
+from core.parameters import KeycapParameters, TextParameters
 
 
 class TextExtrusion:
@@ -81,21 +81,43 @@ class TextExtrusion:
         # 确定要生成的文字列表
         items = self.params.text_items
         if not items:
-            # 兼容旧模式 / 默认模式（单字符）
-            items = [{
-                'text': self.params.letter,
-                'x': self.params.text_offset_x,
-                'y': self.params.text_offset_y,
-                'size': self.params.text_height
-            }]
+            # 兼容模式：如果没有 text_items，尝试使用 params 的兼容属性创建默认项
+            default_item = TextParameters(
+                text=self.params.letter,
+                size=self.params.text_height,
+                offset_x=self.params.text_offset_x,
+                offset_y=self.params.text_offset_y,
+                depth=self.params.text_depth,
+                font_path=self.params.font_path  # 重要：必须设置字体路径
+            )
+            items = [default_item]
             
         for item in items:
-             txt = item.get('text', self.params.letter)
-             x = item.get('x', 0.0)
-             y = item.get('y', 0.0)
-             sz = item.get('size', self.params.text_height)
+             # 支持 TextParameters 对象或字典（向前兼容）
+             if isinstance(item, dict):
+                 txt = item.get('text', self.params.letter)
+                 x = item.get('x', 0.0)
+                 y = item.get('y', 0.0)
+                 sz = item.get('size', self.params.text_height)
+                 font_path = item.get('font', self.params.font_path)
+             else:
+                 # 假设是 TextParameters 对象
+                 txt = item.text
+                 x = item.offset_x
+                 y = item.offset_y
+                 sz = item.size
+                 font_path = item.font_path if item.font_path else self.params.font_path
+             
+             # 临时设置字体路径（如果 item 有自己的字体）
+             original_font = self.params.font_path
+             if font_path:
+                 self.params.font_path = font_path
              
              tm = self.create_text_model(text=txt, font_size=sz)
+             
+             # 恢复原始字体路径
+             self.params.font_path = original_font
+             
              if tm:
                  # 将文字移动到其指定位置 (X, Y)
                  tm = tm.translate((x, y, 0))
@@ -168,6 +190,10 @@ class TextExtrusion:
         # 获取几何参数
         top_thickness = self.params.top_thickness
         top_surface_z = top_thickness # 假设顶面表面在Z=top_thickness
+        
+        # 文字位置：在顶面顶部下方
+        top_surface_z = top_thickness
+        
         text_depth = self.params.text_depth
         
         # 在这里只处理 Z 轴定位 (应用到 Keycap 高度)

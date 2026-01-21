@@ -352,11 +352,19 @@ class ShapelyPen(BasePen):
 def extract_glyph_outline(font_path: str, character: str) -> tuple:
     """
     从字体文件提取字符轮廓
+    
+    支持单个字符和多字符字符串（如 "Shift"、"Win"、"Fn"）
+    对于多字符字符串，会将所有字符水平排列
     """
     try:
         font = TTFont(font_path)
         glyph_set = font.getGlyphSet()
         
+        # 如果字符串长度大于1，需要处理多个字符
+        if len(character) > 1:
+            return _extract_multichar_outline(font, glyph_set, character)
+        
+        # 单个字符的处理（原有逻辑）
         # 获取字符的glyph名称
         # 增强的 cmap 查找
         cmap = font.getBestCmap()
@@ -396,6 +404,90 @@ def extract_glyph_outline(font_path: str, character: str) -> tuple:
         print(f"提取字体轮廓时出错: {e}")
         import traceback
         traceback.print_exc()
+        return None, None
+
+
+def _extract_multichar_outline(font, glyph_set, text: str) -> tuple:
+    """
+    提取多字符字符串的轮廓
+    
+    参数:
+        font: TTFont 对象
+        glyph_set: 字体字形集合
+        text: 多字符字符串
+    
+    返回:
+        (合并后的几何图形, 边界框)
+    """
+    from shapely.geometry import Polygon, MultiPolygon
+    from shapely.ops import unary_union
+    from shapely.affinity import translate
+    
+    char_geometries = []
+    current_x = 0.0
+    cmap = font.getBestCmap()
+    
+    for char in text:
+        try:
+            char_code = ord(char)
+            
+            # 查找字符映射
+            if char_code not in cmap:
+                # 尝试查找备用 cmap
+                found = False
+                for table in font['cmap'].tables:
+                    if char_code in table.cmap:
+                        cmap = table.cmap
+                        found = True
+                        break
+                if not found:
+                    print(f"字符 '{char}' (U+{char_code:04X}) 在字体中未找到，跳过")
+                    continue
+            
+            glyph_name = cmap[char_code]
+            glyph = glyph_set[glyph_name]
+            
+            # 提取字符轮廓
+            pen = ShapelyPen(glyph_set)
+            glyph.draw(pen)
+            char_geometry = pen.get_geometry()
+            
+            if char_geometry is None:
+                continue
+            
+            # 获取字符边界框以计算字符宽度
+            char_bounds = char_geometry.bounds  # (minx, miny, maxx, maxy)
+            char_width = char_bounds[2] - char_bounds[0]
+            
+            # 将字符移动到当前位置（水平排列）
+            # 需要先平移到原点，然后移动到目标位置
+            offset_x = current_x - char_bounds[0]  # 左对齐
+            char_geometry = translate(char_geometry, xoff=offset_x, yoff=0)
+            
+            char_geometries.append(char_geometry)
+            
+            # 更新下一个字符的x位置（字符宽度 + 小间距，通常约为字符宽度的10-20%）
+            spacing = char_width * 0.15  # 15% 的字符宽度作为间距
+            current_x += char_width + spacing
+            
+        except Exception as e:
+            print(f"处理字符 '{char}' 时出错: {e}")
+            continue
+    
+    if not char_geometries:
+        return None, None
+    
+    # 合并所有字符的几何图形
+    try:
+        merged_geometry = unary_union(char_geometries)
+        bounds = merged_geometry.bounds
+        return merged_geometry, bounds
+    except Exception as e:
+        print(f"合并多字符几何图形失败: {e}")
+        # 如果合并失败，返回第一个字符的几何图形
+        if char_geometries:
+            bounds = char_geometries[0].bounds
+            return char_geometries[0], bounds
         return None, None
 
 

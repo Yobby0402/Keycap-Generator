@@ -17,6 +17,8 @@ class PreviewWidget(QWidget):
         self.setup_ui()
         self.keycap_actor = None
         self.text_actor = None
+        self.all_keycap_actors = []  # 用于存储多个按键的actor
+        self.all_text_actors = []  # 用于存储多个文字的actor
     
     def setup_ui(self):
         """设置UI"""
@@ -79,7 +81,7 @@ class PreviewWidget(QWidget):
     def update_model(self, keycap_model: cq.Workplane = None, 
                      text_model: cq.Workplane = None):
         """
-        更新显示的模型
+        更新显示的模型（单个按键）
         
         参数:
             keycap_model: 按键模型
@@ -93,6 +95,9 @@ class PreviewWidget(QWidget):
         if self.text_actor:
             self.renderer.RemoveActor(self.text_actor)
             self.text_actor = None
+        
+        # 清除所有按键模型
+        self.clear_all_models()
         
         # 添加按键模型
         if keycap_model is not None:
@@ -109,6 +114,56 @@ class PreviewWidget(QWidget):
         # 重置相机并渲染
         self.renderer.ResetCamera()
         self.vtk_widget.GetRenderWindow().Render()
+    
+    def update_all_models(self, keycap_models: list, text_models: list):
+        """
+        更新显示所有按键的模型（批量预览）
+        
+        参数:
+            keycap_models: 按键模型列表 [(model, position), ...]，position是(x, y, z)元组
+            text_models: 文字模型列表 [(model, position), ...]
+        """
+        # 清除现有模型
+        self.clear_all_models()
+        if self.keycap_actor:
+            self.renderer.RemoveActor(self.keycap_actor)
+            self.keycap_actor = None
+        if self.text_actor:
+            self.renderer.RemoveActor(self.text_actor)
+            self.text_actor = None
+        
+        # 添加所有按键模型
+        self.all_keycap_actors = []
+        for model, pos in keycap_models:
+            if model is not None:
+                actor = self._cq_to_vtk_actor(model, color=(0.8, 0.8, 0.8))
+                if actor:
+                    actor.SetPosition(pos)
+                    self.renderer.AddActor(actor)
+                    self.all_keycap_actors.append(actor)
+        
+        # 添加所有文字模型
+        self.all_text_actors = []
+        for model, pos in text_models:
+            if model is not None:
+                actor = self._cq_to_vtk_actor(model, color=(1.0, 0.0, 0.0))
+                if actor:
+                    actor.SetPosition(pos)
+                    self.renderer.AddActor(actor)
+                    self.all_text_actors.append(actor)
+        
+        # 重置相机并渲染
+        self.renderer.ResetCamera()
+        self.vtk_widget.GetRenderWindow().Render()
+    
+    def clear_all_models(self):
+        """清除所有批量模型"""
+        for actor in self.all_keycap_actors:
+            self.renderer.RemoveActor(actor)
+        for actor in self.all_text_actors:
+            self.renderer.RemoveActor(actor)
+        self.all_keycap_actors = []
+        self.all_text_actors = []
     
     def _cq_to_vtk_actor(self, cq_object: cq.Workplane, color: tuple = (1.0, 1.0, 1.0)) -> vtk.vtkActor:
         """

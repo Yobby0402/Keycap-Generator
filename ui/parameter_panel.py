@@ -3,7 +3,8 @@
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QDoubleSpinBox, QComboBox, QPushButton,
-                             QGroupBox, QFileDialog, QMessageBox, QCheckBox)
+                             QGroupBox, QFileDialog, QMessageBox, QCheckBox,
+                             QFormLayout, QGridLayout)
 from PyQt5.QtCore import Qt, pyqtSignal
 from core.parameters import KeycapParameters
 from core.keycap_presets import (STANDARD_KEY_SIZES, KEYCAP_HEIGHT_PROFILES,
@@ -19,16 +20,20 @@ class ParameterPanel(QWidget):
     # 信号：插入文字
     insert_text_signal = pyqtSignal(str, float)  # (text, font_size)
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
         self.params = KeycapParameters()
+        self.settings = settings
         self.setup_ui()
         self.load_system_fonts()
+        if self.settings:
+            self.load_default_parameters()
     
     def setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+        layout.setContentsMargins(5, 5, 5, 5)
         
         # 字体选择组
         font_group = QGroupBox("字体设置")
@@ -178,19 +183,7 @@ class ParameterPanel(QWidget):
         # 斜角组
         angle_group = QGroupBox("斜角 (度)")
         angle_layout = QVBoxLayout()
-        
-        # 顶部斜角
-        top_angle_layout = QHBoxLayout()
-        top_angle_layout.addWidget(QLabel("顶部斜角:"))
-        self.top_angle_spin = QDoubleSpinBox()
-        self.top_angle_spin.setRange(0.0, 45.0)
-        self.top_angle_spin.setValue(0.0)
-        self.top_angle_spin.setDecimals(1)
-        self.top_angle_spin.setSuffix(" °")
-        self.top_angle_spin.valueChanged.connect(self.on_parameter_changed)
-        top_angle_layout.addWidget(self.top_angle_spin)
-        angle_layout.addLayout(top_angle_layout)
-        
+
         # 侧面斜角
         side_angle_layout = QHBoxLayout()
         side_angle_layout.addWidget(QLabel("侧面斜角:"))
@@ -205,6 +198,63 @@ class ParameterPanel(QWidget):
         
         angle_group.setLayout(angle_layout)
         layout.addWidget(angle_group)
+        
+        # 边缘形状设置组
+        edge_group = QGroupBox("边缘形状设置")
+        edge_layout = QVBoxLayout()
+
+        # 边缘类型
+        edge_mode_layout = QHBoxLayout()
+        edge_mode_layout.addWidget(QLabel("类型:"))
+        self.edge_mode_combo = QComboBox()
+        self.edge_mode_combo.addItems(["圆角", "45度斜角"])
+        self.edge_mode_combo.currentTextChanged.connect(self.on_parameter_changed)
+        edge_mode_layout.addWidget(self.edge_mode_combo)
+        edge_layout.addLayout(edge_mode_layout)
+
+        # 边缘半径
+        edge_radius_layout = QHBoxLayout()
+        edge_radius_layout.addWidget(QLabel("半径:"))
+        self.edge_radius_spin = QDoubleSpinBox()
+        self.edge_radius_spin.setRange(0.0, 5.0)
+        self.edge_radius_spin.setValue(0.0)
+        self.edge_radius_spin.setDecimals(2)
+        self.edge_radius_spin.setSuffix(" mm")
+        self.edge_radius_spin.setMinimumHeight(25)
+        self.edge_radius_spin.valueChanged.connect(self.on_parameter_changed)
+        edge_radius_layout.addWidget(self.edge_radius_spin)
+        edge_layout.addLayout(edge_radius_layout)
+
+        # 作用边缘（外侧/内侧）
+        edge_apply_layout = QHBoxLayout()
+        self.edge_outer_check = QCheckBox("外侧边缘")
+        self.edge_outer_check.setChecked(True)
+        self.edge_outer_check.stateChanged.connect(self.on_parameter_changed)
+        self.edge_inner_check = QCheckBox("内侧边缘")
+        self.edge_inner_check.setChecked(False)
+        self.edge_inner_check.stateChanged.connect(self.on_parameter_changed)
+        edge_apply_layout.addWidget(self.edge_outer_check)
+        edge_apply_layout.addWidget(self.edge_inner_check)
+        edge_layout.addLayout(edge_apply_layout)
+
+        # 生效边（左右上下）
+        edge_sides_layout = QGridLayout()
+        edge_sides_layout.addWidget(QLabel("生效边:"), 0, 0)
+        self.edge_left_check = QCheckBox("左")
+        self.edge_right_check = QCheckBox("右")
+        self.edge_top_check = QCheckBox("上")
+        self.edge_bottom_check = QCheckBox("下")
+        for chk in (self.edge_left_check, self.edge_right_check, self.edge_top_check, self.edge_bottom_check):
+            chk.setChecked(True)
+            chk.stateChanged.connect(self.on_parameter_changed)
+        edge_sides_layout.addWidget(self.edge_left_check, 0, 1)
+        edge_sides_layout.addWidget(self.edge_right_check, 0, 2)
+        edge_sides_layout.addWidget(self.edge_top_check, 1, 1)
+        edge_sides_layout.addWidget(self.edge_bottom_check, 1, 2)
+        edge_layout.addLayout(edge_sides_layout)
+
+        edge_group.setLayout(edge_layout)
+        layout.addWidget(edge_group)
         
         # 文字参数组
         text_group = QGroupBox("文字参数 (mm)")
@@ -306,6 +356,39 @@ class ParameterPanel(QWidget):
         
         stem_group.setLayout(stem_layout)
         layout.addWidget(stem_group)
+
+        # 卫星轴设置（单键）
+        stabilizer_group = QGroupBox("卫星轴设置")
+        stabilizer_layout = QVBoxLayout()
+
+        self.stabilizer_enabled_checkbox = QCheckBox("启用卫星轴连接器")
+        self.stabilizer_enabled_checkbox.setChecked(False)
+        self.stabilizer_enabled_checkbox.stateChanged.connect(self.on_parameter_changed)
+        stabilizer_layout.addWidget(self.stabilizer_enabled_checkbox)
+
+        type_layout = QHBoxLayout()
+        type_layout.addWidget(QLabel("类型:"))
+        self.stabilizer_type_combo = QComboBox()
+        self.stabilizer_type_combo.addItem("自定义", -1)
+        self.stabilizer_type_combo.addItem("2u (标准)", 2.0)
+        self.stabilizer_type_combo.addItem("6.25u (空格键)", 6.25)
+        self.stabilizer_type_combo.currentIndexChanged.connect(self._on_stabilizer_type_changed)
+        type_layout.addWidget(self.stabilizer_type_combo)
+        stabilizer_layout.addLayout(type_layout)
+
+        length_layout = QHBoxLayout()
+        length_layout.addWidget(QLabel("长度:"))
+        self.stabilizer_length_spin = QDoubleSpinBox()
+        self.stabilizer_length_spin.setRange(10.0, 200.0)
+        self.stabilizer_length_spin.setValue(50.0)
+        self.stabilizer_length_spin.setDecimals(1)
+        self.stabilizer_length_spin.setSuffix(" mm")
+        self.stabilizer_length_spin.valueChanged.connect(self._on_stabilizer_length_changed)
+        length_layout.addWidget(self.stabilizer_length_spin)
+        stabilizer_layout.addLayout(length_layout)
+
+        stabilizer_group.setLayout(stabilizer_layout)
+        layout.addWidget(stabilizer_group)
         
         # 按钮
         self.generate_btn = QPushButton("生成模型")
@@ -427,6 +510,35 @@ class ParameterPanel(QWidget):
         self.params.key_depth = height
         self.depth_spin.setValue(height)
         self.on_parameter_changed()
+
+    def _on_stabilizer_type_changed(self, index: int):
+        """卫星轴类型改变"""
+        value = self.stabilizer_type_combo.currentData()
+        if value is None or value <= 0:
+            return
+        try:
+            from core.keycap_presets import u_to_mm
+            length_mm = u_to_mm(float(value))
+            self.stabilizer_length_spin.blockSignals(True)
+            self.stabilizer_length_spin.setValue(length_mm)
+            self.stabilizer_length_spin.blockSignals(False)
+            self.on_parameter_changed()
+        except Exception:
+            pass
+
+    def _on_stabilizer_length_changed(self, value: float):
+        """卫星轴长度改变时，更新类型选择"""
+        try:
+            from core.keycap_presets import u_to_mm
+            if abs(value - u_to_mm(2.0)) < 1.0:
+                self.stabilizer_type_combo.setCurrentIndex(1)
+            elif abs(value - u_to_mm(6.25)) < 1.0:
+                self.stabilizer_type_combo.setCurrentIndex(2)
+            else:
+                self.stabilizer_type_combo.setCurrentIndex(0)
+        except Exception:
+            self.stabilizer_type_combo.setCurrentIndex(0)
+        self.on_parameter_changed()
     
     def _update_params_from_ui(self):
         """从UI更新参数（内部使用，不发信号）"""
@@ -435,7 +547,6 @@ class ParameterPanel(QWidget):
             self.params.key_height = self.height_spin.value()
         self.params.key_depth = self.depth_spin.value()
         self.params.wall_thickness = self.wall_spin.value()
-        self.params.top_angle = self.top_angle_spin.value()
         self.params.side_angle = self.side_angle_spin.value()
         self.params.letter = self.letter_edit.text() or "A"
         self.params.text_height = self.text_height_spin.value()
@@ -448,6 +559,21 @@ class ParameterPanel(QWidget):
         self.params.stem_cross_width = self.stem_cross_width_spin.value()
         self.params.height_profile = self.height_profile_combo.currentText()
         self.params.keycap_row = self.row_combo.currentText()
+
+        # 边缘形状参数
+        mode_map = {"圆角": "fillet", "45度斜角": "chamfer"}
+        self.params.edge_profile_mode = mode_map.get(self.edge_mode_combo.currentText(), "fillet")
+        self.params.edge_profile_radius = self.edge_radius_spin.value()
+        self.params.edge_profile_outer = self.edge_outer_check.isChecked()
+        self.params.edge_profile_inner = self.edge_inner_check.isChecked()
+        self.params.edge_profile_left = self.edge_left_check.isChecked()
+        self.params.edge_profile_right = self.edge_right_check.isChecked()
+        self.params.edge_profile_top = self.edge_top_check.isChecked()
+        self.params.edge_profile_bottom = self.edge_bottom_check.isChecked()
+
+        # 卫星轴参数（单键）
+        self.params.stabilizer_enabled = self.stabilizer_enabled_checkbox.isChecked()
+        self.params.stabilizer_length = self.stabilizer_length_spin.value()
 
     def on_parameter_changed(self, *args):
         """参数改变时的处理"""
@@ -465,3 +591,44 @@ class ParameterPanel(QWidget):
         """获取当前参数"""
         self._update_params_from_ui()
         return self.params
+    
+    def load_default_parameters(self):
+        """从设置中加载默认参数"""
+        if not self.settings:
+            return
+        
+        # 加载默认斜角
+        default_side_angle = self.settings.get_default_side_angle()
+        self.side_angle_spin.setValue(default_side_angle)
+        self.params.side_angle = default_side_angle
+        
+        # 加载默认边缘形状参数
+        mode_map = {"fillet": "圆角", "chamfer": "45度斜角"}
+        default_mode = self.settings.get_default_edge_profile_mode()
+        self.edge_mode_combo.setCurrentText(mode_map.get(default_mode, "圆角"))
+        self.edge_radius_spin.setValue(self.settings.get_default_edge_profile_radius())
+        self.edge_outer_check.setChecked(self.settings.get_default_edge_profile_outer())
+        self.edge_inner_check.setChecked(self.settings.get_default_edge_profile_inner())
+        self.edge_left_check.setChecked(self.settings.get_default_edge_profile_left())
+        self.edge_right_check.setChecked(self.settings.get_default_edge_profile_right())
+        self.edge_top_check.setChecked(self.settings.get_default_edge_profile_top())
+        self.edge_bottom_check.setChecked(self.settings.get_default_edge_profile_bottom())
+
+        self.params.edge_profile_mode = default_mode
+        self.params.edge_profile_radius = self.edge_radius_spin.value()
+        self.params.edge_profile_outer = self.edge_outer_check.isChecked()
+        self.params.edge_profile_inner = self.edge_inner_check.isChecked()
+        self.params.edge_profile_left = self.edge_left_check.isChecked()
+        self.params.edge_profile_right = self.edge_right_check.isChecked()
+        self.params.edge_profile_top = self.edge_top_check.isChecked()
+        self.params.edge_profile_bottom = self.edge_bottom_check.isChecked()
+        
+        # 加载默认字体
+        default_font_path = self.settings.get_default_font_path()
+        if default_font_path:
+            # 尝试在字体列表中找到该字体
+            for i in range(self.font_combo.count()):
+                if self.font_combo.itemData(i) == default_font_path:
+                    self.font_combo.setCurrentIndex(i)
+                    self.params.font_path = default_font_path
+                    break
