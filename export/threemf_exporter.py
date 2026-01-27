@@ -7,17 +7,19 @@ from pathlib import Path
 from utils.file_utils import ensure_directory
 
 
-def export_3mf(keycap_model: cq.Workplane, 
+def export_3mf(keycap_model: cq.Workplane,
                text_model: cq.Workplane,
-               filepath: str) -> bool:
+               filepath: str,
+               image_inlay: cq.Workplane = None) -> bool:
     """
     导出模型为3MF文件（支持多材质）
-    
+
     参数:
         keycap_model: 按键模型
         text_model: 文字模型
         filepath: 输出文件路径
-    
+        image_inlay: 图片凹陷的镶嵌体（depth>0），用于双色打印
+
     返回:
         是否成功
     """
@@ -25,29 +27,28 @@ def export_3mf(keycap_model: cq.Workplane,
         import trimesh
         import tempfile
         import os as os_module
-        
+
         if keycap_model is None:
             return False
-        
+
         # 确保目录存在
         ensure_directory(str(Path(filepath).parent))
-        
+
         # 创建临时目录
         with tempfile.TemporaryDirectory() as tmpdir:
             meshes = []
             names = []
             colors = []
-            
+
             # 处理按键主体
             if keycap_model:
                 keycap_tmp = os_module.path.join(tmpdir, "keycap.stl")
-                # 使用CadQuery的导出功能
                 cq.exporters.export(keycap_model, keycap_tmp)
                 keycap_mesh = trimesh.load(keycap_tmp)
                 meshes.append(keycap_mesh)
                 names.append("Keycap")
                 colors.append([64, 64, 64, 255])  # 深灰色
-            
+
             # 处理文字部分
             if text_model:
                 text_tmp = os_module.path.join(tmpdir, "text.stl")
@@ -56,14 +57,22 @@ def export_3mf(keycap_model: cq.Workplane,
                 meshes.append(text_mesh)
                 names.append("Text")
                 colors.append([255, 255, 255, 255])  # 白色
-            
+
+            # 处理图片镶嵌体（凹陷时填充用）
+            if image_inlay is not None:
+                inlay_tmp = os_module.path.join(tmpdir, "inlay.stl")
+                cq.exporters.export(image_inlay, inlay_tmp)
+                inlay_mesh = trimesh.load(inlay_tmp)
+                meshes.append(inlay_mesh)
+                names.append("Inlay")
+                colors.append([230, 190, 50, 255])  # 金/黄色
+
             # 创建场景并设置颜色
             scene = trimesh.Scene()
             for mesh, name, color in zip(meshes, names, colors):
-                # 设置顶点颜色
                 mesh.visual.vertex_colors = color
                 scene.add_geometry(mesh, node_name=name)
-            
+
             # 导出为3MF
             scene.export(filepath, file_type='3mf')
         

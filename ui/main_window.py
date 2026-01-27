@@ -13,7 +13,7 @@ from ui.preview_widget import PreviewWidget
 from ui.preview_2d_widget import Preview2DWidget
 from ui.kle_preview_widget import KLEPreviewWidget
 from ui.settings_dialog import SettingsDialog
-from core.parameters import KeycapParameters, TextParameters
+from core.parameters import KeycapParameters, TextParameters, ImageParameters
 from core.keycap_modeler import KeycapModeler
 from core.settings import Settings
 from export.stl_exporter import export_keycap_and_text as export_stl_keycap_text
@@ -26,7 +26,7 @@ import os
 class ModelGenerationThread(QThread):
     """模型生成线程（避免UI阻塞）"""
     
-    finished = pyqtSignal(object, object)  # (keycap_model, text_model)
+    finished = pyqtSignal(object, object, object)  # (keycap_model, text_model, image_inlay)
     error = pyqtSignal(str)
     
     def __init__(self, params: KeycapParameters):
@@ -37,8 +37,8 @@ class ModelGenerationThread(QThread):
         """运行模型生成"""
         try:
             modeler = KeycapModeler(self.params)
-            keycap_model, text_model = modeler.generate()
-            self.finished.emit(keycap_model, text_model)
+            keycap_model, text_model, image_inlay = modeler.generate()
+            self.finished.emit(keycap_model, text_model, image_inlay)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -168,6 +168,204 @@ class BatchGenerationThread(QThread):
             self.error.emit(str(e))
 
 
+class BatchExportThread(QThread):
+    """批量导出后台线程（避免生成/合并/3MF 导出阻塞主线程导致界面卡死）"""
+    progress = pyqtSignal(int, int)  # current, total
+    progress_message = pyqtSignal(str)
+    finished = pyqtSignal(bool, str, str)  # success, detail_msg(for dialog), status_msg
+    error = pyqtSignal(str)
+
+    def __init__(self, mode, path, kle_keys, batch_configs, default_geometry, default_font,
+                 row_spacing, col_spacing, row_heights, use_height_profile):
+        super().__init__()
+        self.mode = mode
+        self.path = path
+        self.kle_keys = kle_keys
+        self.batch_configs = batch_configs or {}
+        self.default_geometry = default_geometry
+        self.default_font = default_font
+        self.row_spacing = float(row_spacing)
+        self.col_spacing = float(col_spacing)
+        self.row_heights = dict(row_heights) if row_heights else {}
+        self.use_height_profile = bool(use_height_profile)
+
+    def run(self):
+        try:
+            from core.batch_generator import BatchGenerator
+            from core.legend_mapping import LegendMapping
+            from core.key_type_analyzer import KeyTypeAnalyzer
+            from core.keycap_presets import u_to_mm
+            from export.stl_exporter import export_keycap_and_text
+            from export.step_exporter import export_keycap_and_text as export_step_keycap_text
+            from export.threemf_exporter import export_3mf
+            import os
+
+            n = len(self.kle_keys)
+            if n == 0:
+                self.finished.emit(False, "没有可导出的按键", "导出取消")
+                return
+
+            if self.mode == "separate":
+                success_count = 0
+                for i, kle_key in enumerate(self.kle_keys):
+                    self.progress.emit(i + 1, n)
+                    self.progress_message.emit(f"正在生成按键 {i+1}/{n}...")
+                    batch_config = self.batch_configs.get(
+                        KeyTypeAnalyzer.get_signature_for_key(kle_key).to_string()
+                    )
+                    global_geometry, legend_mapping = self._get_geometry_and_mapping(kle_key, batch_config)
+                    generator = BatchGenerator(global_geometry, legend_mapping)
+                    generator.set_default_font(self.default_font)
+                    keycap_model, text_model = generator.generate_single_key(kle_key)
+                    if keycap_model:
+                        main_label = (kle_key.labels[9] if len(kle_key.labels) > 9 and kle_key.labels[9]
+                                      else kle_key.labels[0] if kle_key.labels else "Key")
+                        safe_label = "".join(c for c in str(main_label) if c.isalnum() or c in (' ', '-', '_'))[:10]
+                        filename = f"Key_R{getattr(kle_key, 'row', 0)}_{i+1:02d}_{safe_label}"
+                        base_path = os.path.join(self.path, filename)
+                        k_success, _, _ = export_keycap_and_text(keycap_model, text_model, base_path)
+                        if k_success:
+                            success_count += 1
+                self.finished.emit(
+                    True,
+                    f"已导出 {success_count} 个按键到:\n{self.path}",
+                    f"导出完成：成功 {success_count}/{n} 个按键"
+                )
+                return
+
+            # 合并导出
+            row_spacing, col_spacing = self.row_spacing, self.col_spacing
+            sorted_keys = sorted(self.kle_keys, key=lambda k: (k.y, k.x))
+            rows = {}
+            for k in sorted_keys:
+                y = k.y
+                rows.setdefault(y, []).append(k)
+            sorted_rows = sorted(rows.keys())
+            first_row_max_height = 0.0
+            if sorted_rows:
+                for key in rows[sorted_rows[0]]:
+                    first_row_max_height = max(first_row_max_height, u_to_mm(key.height))
+            current_y = first_row_max_height / 2
+            max_row_height = 0.0
+            all_keycaps, all_texts = [], []
+
+            for row_idx, row_y in enumerate(sorted_rows):
+                row_keys = sorted(rows[row_y], key=lambda k: k.x)
+                current_x = 0.0
+                for i, kle_key in enumerate(row_keys):
+                    done = len(all_keycaps) + 1
+                    self.progress.emit(done, n)
+                    self.progress_message.emit(f"正在生成按键 {done}/{n}...")
+                    batch_config = self.batch_configs.get(
+                        KeyTypeAnalyzer.get_signature_for_key(kle_key).to_string()
+                    )
+                    global_geometry, legend_mapping = self._get_geometry_and_mapping(kle_key, batch_config)
+                    generator = BatchGenerator(global_geometry, legend_mapping)
+                    generator.set_default_font(self.default_font)
+                    keycap_model, text_model = generator.generate_single_key(kle_key)
+                    if keycap_model:
+                        kw = u_to_mm(kle_key.width)
+                        kh = u_to_mm(kle_key.height)
+                        cx = current_x + kw / 2
+                        cy = current_y - kh / 2
+                        keycap_pos = keycap_model.translate((cx, cy, 0))
+                        text_pos = text_model.translate((cx, cy, 0)) if text_model else None
+                        all_keycaps.append(keycap_pos)
+                        if text_pos:
+                            all_texts.append(text_pos)
+                        current_x += kw + col_spacing
+                        max_row_height = max(max_row_height, kh)
+                if row_idx < len(sorted_rows) - 1:
+                    current_y -= max_row_height + row_spacing
+                    max_row_height = 0.0
+
+            if not all_keycaps:
+                self.finished.emit(False, "没有成功生成任何按键", "批量导出完成")
+                return
+
+            self.progress_message.emit("正在合并键帽模型，请稍候...")
+            merged_keycap = all_keycaps[0]
+            for k in all_keycaps[1:]:
+                merged_keycap = merged_keycap.union(k)
+            merged_text = None
+            if all_texts:
+                self.progress_message.emit("正在合并字符模型，请稍候...")
+                merged_text = all_texts[0]
+                for t in all_texts[1:]:
+                    if t:
+                        merged_text = merged_text.union(t)
+
+            path = self.path
+            file_ext = os.path.splitext(path)[1].lower()
+            self.progress_message.emit("正在写入文件，请稍候...")
+            if file_ext == '.stl':
+                base_path = os.path.splitext(path)[0]
+                k_ok, _, _ = export_keycap_and_text(merged_keycap, merged_text, base_path)
+                if k_ok:
+                    self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.stl\n{base_path}_text.stl", "批量导出完成")
+                else:
+                    self.finished.emit(False, "STL 导出失败", "批量导出完成")
+            elif file_ext in ['.step', '.stp']:
+                base_path = os.path.splitext(path)[0]
+                k_ok, _, _ = export_step_keycap_text(merged_keycap, merged_text, base_path)
+                if k_ok:
+                    self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.step\n{base_path}_text.step", "批量导出完成")
+                else:
+                    self.finished.emit(False, "STEP 导出失败", "批量导出完成")
+            elif file_ext == '.3mf':
+                ok = export_3mf(merged_keycap, merged_text, path)
+                if ok:
+                    self.finished.emit(True, f"已导出合并文件到:\n{path}", "批量导出完成")
+                else:
+                    self.finished.emit(False, "3MF 导出失败", "批量导出完成")
+            else:
+                self.finished.emit(False, f"不支持的文件格式: {file_ext}", "批量导出完成")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.error.emit(str(e))
+
+    def _get_geometry_and_mapping(self, kle_key, batch_config):
+        from core.legend_mapping import LegendMapping, LegendStyle
+        from copy import deepcopy
+        row_heights = self.row_heights if self.use_height_profile else {}
+        if batch_config:
+            g = batch_config.geometry
+            if row_heights and kle_key.y in row_heights:
+                g = deepcopy(g)
+                g.key_depth = row_heights[kle_key.y]
+            if not hasattr(g, 'stabilizer_enabled'):
+                g.stabilizer_enabled = getattr(batch_config.geometry, 'stabilizer_enabled', False)
+            if not hasattr(g, 'stabilizer_length'):
+                g.stabilizer_length = getattr(batch_config.geometry, 'stabilizer_length', 50.0)
+            lm = LegendMapping()
+            for pos_idx, style in batch_config.text_styles.items():
+                s = LegendStyle(
+                    font_path=style.font_path or self.default_font,
+                    size=getattr(style, 'size', 3.0),
+                    offset_x=getattr(style, 'offset_x', 0.0),
+                    offset_y=getattr(style, 'offset_y', 0.0),
+                    depth=getattr(style, 'depth', 0.5),
+                    rotation=getattr(style, 'rotation', 0.0),
+                    stroke_width=getattr(style, 'stroke_width', 0.0),
+                    bold=getattr(style, 'bold', False),
+                    italic=getattr(style, 'italic', False),
+                    underline=getattr(style, 'underline', False)
+                )
+                lm.set_style(pos_idx, s)
+            return g, lm
+        g = self.default_geometry
+        if row_heights and kle_key.y in row_heights:
+            g = deepcopy(g)
+            g.key_depth = row_heights[kle_key.y]
+        lm = LegendMapping.create_default()
+        if self.default_font:
+            for style in lm.mapping.values():
+                if style.font_path is None:
+                    style.font_path = self.default_font
+        return g, lm
+
+
 class MainWindow(QMainWindow):
     """主窗口"""
     
@@ -175,6 +373,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.current_keycap_model = None
         self.current_text_model = None
+        self.current_image_inlay = None
         self.last_generated_text_pos = None # 上次生成时的文字位置 (x, y)
         self.settings = Settings()
         self.setup_ui()
@@ -226,6 +425,7 @@ class MainWindow(QMainWindow):
         self.parameter_panel.parameters_changed.connect(self.on_parameters_changed)
         self.parameter_panel.generate_btn.clicked.connect(self.generate_model)
         self.parameter_panel.insert_text_signal.connect(self.on_insert_text)
+        self.parameter_panel.insert_image_signal.connect(self.on_insert_image)
         single_key_layout.addWidget(self.parameter_panel, stretch=1)
         
         # 右侧预览区域
@@ -235,6 +435,7 @@ class MainWindow(QMainWindow):
         # 2D 预览
         self.preview_2d_widget = Preview2DWidget()
         self.preview_2d_widget.text_position_changed.connect(self.on_text_position_changed)
+        self.preview_2d_widget.selection_changed.connect(self.on_2d_selection_changed)
         self.preview_2d_widget.drag_finished.connect(self.check_auto_update)
         self.preview_2d_widget.content_changed.connect(self.check_auto_update)
         # 从设置加载对齐配置
@@ -252,71 +453,53 @@ class MainWindow(QMainWindow):
         
         self.mode_tabs.addTab(single_key_widget, "单键设计")
         
-        # ===== Tab 1: 批量布局（上下布局） =====
+        # ===== Tab 1: 键盘设计（左右布局） =====
+        # 左侧：2D预览、模型间距(在2D下方)、功能按钮、3D预览；右侧：按键属性、高度类型
         batch_widget = QWidget()
-        batch_layout = QVBoxLayout(batch_widget)
-        batch_layout.setSpacing(5)
-        batch_layout.setContentsMargins(5, 5, 5, 5)
+        batch_main = QHBoxLayout(batch_widget)
+        batch_main.setSpacing(8)
+        batch_main.setContentsMargins(8, 8, 8, 8)
         
-        # 上方区域：左右布局（预览 + 属性面板）
-        top_layout = QHBoxLayout()
-        top_layout.setSpacing(5)
-        
-        # 左侧：预览区域（2D + 3D）
-        batch_preview_layout = QVBoxLayout()
-        batch_preview_layout.setSpacing(5)
-        
-        # KLE 2D 预览
-        self.kle_preview_widget = KLEPreviewWidget()
-        self.kle_preview_widget.key_selected.connect(self.on_kle_key_selected)
-        # 连接间距更新信号
-        self.batch_panel = None  # 稍后在setup_ui中设置
-        batch_preview_layout.addWidget(self.kle_preview_widget, stretch=1)
-        
-        # 3D 预览（批量模式也显示）
-        self.batch_preview_widget = PreviewWidget()
-        batch_preview_layout.addWidget(self.batch_preview_widget, stretch=1)
-        
-        batch_preview_container = QWidget()
-        batch_preview_container.setLayout(batch_preview_layout)
-        top_layout.addWidget(batch_preview_container, stretch=3)
-        
-        # 右侧：属性面板（集成编辑功能）
-        from ui.key_property_panel import KeyPropertyPanel
-        self.key_property_panel = KeyPropertyPanel()
-        self.key_property_panel.data_updated.connect(self.on_kle_key_updated_and_preview)
-        top_layout.addWidget(self.key_property_panel, stretch=1)
-        
-        batch_layout.addLayout(top_layout, stretch=2)
-        
-        # 下方参数面板
         self.batch_panel = BatchPanel()
         self.batch_panel.kle_data_changed.connect(self.on_kle_data_changed)
         self.batch_panel.generate_batch_signal.connect(self.on_generate_batch)
         self.batch_panel.generate_all_signal.connect(self.on_generate_all_keys)
         self.batch_panel.export_all_signal.connect(self.on_export_all)
         
-        # 连接间距更新到2D预览
-        def update_2d_spacing():
-            row_spacing = getattr(self.batch_panel, 'row_spacing', 2.0)
-            col_spacing = getattr(self.batch_panel, 'col_spacing', 2.0)
-            self.kle_preview_widget.set_spacing(row_spacing, col_spacing)
+        # 左侧列（竖排）：2D 4 / 模型间距 1（在2D下方）/ 按钮 1 / 3D 4
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        self.kle_preview_widget = KLEPreviewWidget()
+        self.kle_preview_widget.key_selected.connect(self.on_kle_key_selected)
+        left_col.addWidget(self.kle_preview_widget, stretch=4)
+        left_col.addWidget(self.batch_panel.get_spacing_widget(), stretch=1)
+        left_col.addWidget(self.batch_panel.get_actions_widget(), stretch=1)
+        self.batch_preview_widget = PreviewWidget()
+        left_col.addWidget(self.batch_preview_widget, stretch=4)
         
-        # 监听间距变化（直接连接spinbox）
-        if hasattr(self.batch_panel, 'row_spacing_spin'):
-            self.batch_panel.row_spacing_spin.valueChanged.connect(update_2d_spacing)
-        if hasattr(self.batch_panel, 'col_spacing_spin'):
-            self.batch_panel.col_spacing_spin.valueChanged.connect(update_2d_spacing)
+        left_wrap = QWidget()
+        left_wrap.setLayout(left_col)
+        batch_main.addWidget(left_wrap, stretch=7)  # 左侧占70%
         
-        batch_layout.addWidget(self.batch_panel, stretch=1)
+        # 右侧列（竖排）：上=按键属性，下=高度类型
+        from ui.key_property_panel import KeyPropertyPanel
+        self.key_property_panel = KeyPropertyPanel()
+        self.key_property_panel.data_updated.connect(self.on_kle_key_updated_and_preview)
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
+        right_col.addWidget(self.key_property_panel, stretch=1)
+        right_col.addWidget(self.batch_panel.get_height_widget(), stretch=1)
+        right_wrap = QWidget()
+        right_wrap.setLayout(right_col)
+        batch_main.addWidget(right_wrap, stretch=3)  # 右侧占30%
         
-        self.mode_tabs.addTab(batch_widget, "批量布局")
+        self.mode_tabs.addTab(batch_widget, "键盘设计")
         
-        # ===== Tab 2: 批量编辑 =====
+        # ===== Tab 2: 键盘参数 =====
         from ui.batch_edit_tab import BatchEditTab
         self.batch_edit_tab = BatchEditTab()
         self.batch_edit_tab.config_applied.connect(self.on_batch_config_applied)
-        self.mode_tabs.addTab(self.batch_edit_tab, "批量编辑")
+        self.mode_tabs.addTab(self.batch_edit_tab, "键盘参数")
         
         main_layout.addWidget(self.mode_tabs)
         
@@ -335,11 +518,7 @@ class MainWindow(QMainWindow):
     def on_kle_data_changed(self, keys):
         """KLE 数据更新"""
         self.kle_preview_widget.set_data(keys)
-        
-        # 设置初始间距（从batch_panel获取，确保与UI一致）
-        row_spacing = getattr(self.batch_panel, 'row_spacing', 2.0)
-        col_spacing = getattr(self.batch_panel, 'col_spacing', 2.0)
-        self.kle_preview_widget.set_spacing(row_spacing, col_spacing)
+        # 2D 预览使用固定 0 间距，不随模型间距变化
         
         # 更新批量编辑界面
         if hasattr(self, 'batch_edit_tab'):
@@ -643,306 +822,61 @@ class MainWindow(QMainWindow):
         self._execute_batch_export(export_mode, export_dir if export_mode == "separate" else file_path)
     
     def _execute_batch_export(self, mode: str, path: str):
-        """执行批量导出"""
-        from core.batch_generator import BatchGenerator
-        from core.legend_mapping import LegendMapping, LegendStyle
-        from core.parameters import KeycapGeometry
-        from export.stl_exporter import export_stl, export_keycap_and_text
-        from export.step_exporter import export_step
-        from export.threemf_exporter import export_3mf
-        from core.key_type_analyzer import KeyTypeAnalyzer
-        import cadquery as cq
-        import os
-        
-        # 获取批量编辑配置（如果存在）
+        """在后台线程执行批量导出，避免主线程阻塞导致界面卡死"""
         batch_configs = {}
         if hasattr(self, 'batch_edit_tab'):
             batch_configs = self.batch_edit_tab.get_configs()
-        
-        # 获取默认参数
         single_params = self.parameter_panel.get_parameters()
         default_geometry = single_params.geometry
         default_font = single_params.font_path
-        
-        # 如果没有设置字体，使用Times New Roman作为默认字体
         if not default_font:
             from utils.font_utils import find_times_new_roman
             default_font = find_times_new_roman()
-            if default_font:
-                print(f"使用默认字体 Times New Roman: {default_font}")
-        
         kle_keys = self.kle_preview_widget.keys
-        
-        # 显示进度
+        row_spacing = getattr(self.batch_panel, 'row_spacing', 2.0)
+        col_spacing = getattr(self.batch_panel, 'col_spacing', 2.0)
+        use_height_profile = getattr(self.batch_panel, 'use_height_profile', False)
+        row_heights = getattr(self.batch_panel, 'row_heights', {}) or {}
+
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, len(kle_keys))
         self.progress_bar.setValue(0)
         self.status_bar.showMessage("正在批量生成...")
-        
-        if mode == "separate":
-            # 分离导出
-            success_count = 0
-            for i, kle_key in enumerate(kle_keys):
-                self.progress_bar.setValue(i + 1)
-                self.status_bar.showMessage(f"正在生成按键 {i+1}/{len(kle_keys)}...")
-                
-                # 为每个按键获取对应的配置
-                batch_config = batch_configs.get(KeyTypeAnalyzer.get_signature_for_key(kle_key).to_string()) if batch_configs else None
-                
-                # 获取行高度设置（从batch_panel）
-                row_heights = {}
-                if hasattr(self.batch_panel, 'use_height_profile') and self.batch_panel.use_height_profile:
-                    row_heights = self.batch_panel.row_heights.copy()
-                
-                # 创建生成器（使用批量编辑配置或默认配置）
-                if batch_config:
-                    global_geometry = batch_config.geometry
-                    
-                    # 应用行高度设置（如果启用）
-                    if row_heights and kle_key.y in row_heights:
-                        from copy import deepcopy
-                        geometry_copy = deepcopy(global_geometry)
-                        geometry_copy.key_depth = row_heights[kle_key.y]
-                        global_geometry = geometry_copy
-                    # 确保卫星轴参数被正确设置
-                    if not hasattr(global_geometry, 'stabilizer_enabled'):
-                        global_geometry.stabilizer_enabled = getattr(batch_config.geometry, 'stabilizer_enabled', False)
-                    if not hasattr(global_geometry, 'stabilizer_length'):
-                        global_geometry.stabilizer_length = getattr(batch_config.geometry, 'stabilizer_length', 50.0)
-                    legend_mapping = LegendMapping()
-                    for pos_idx, style in batch_config.text_styles.items():
-                        # 确保字体路径已设置
-                        if style.font_path is None:
-                            style.font_path = default_font
-                        legend_mapping.set_style(pos_idx, style)
-                else:
-                    global_geometry = default_geometry
-                    
-                    # 应用行高度设置（如果启用）
-                    if row_heights and kle_key.y in row_heights:
-                        from copy import deepcopy
-                        geometry_copy = deepcopy(global_geometry)
-                        geometry_copy.key_depth = row_heights[kle_key.y]
-                        global_geometry = geometry_copy
-                    
-                    legend_mapping = LegendMapping.create_default()
-                    if default_font:
-                        for style in legend_mapping.mapping.values():
-                            if style.font_path is None:
-                                style.font_path = default_font
-                
-                generator = BatchGenerator(global_geometry, legend_mapping)
-                generator.set_default_font(default_font)
-                
-                keycap_model, text_model = generator.generate_single_key(kle_key)
-                
-                if keycap_model:
-                    # 生成文件名（基于位置和字符）
-                    main_label = kle_key.labels[9] if len(kle_key.labels) > 9 and kle_key.labels[9] else kle_key.labels[0] if kle_key.labels else "Key"
-                    safe_label = "".join(c for c in main_label if c.isalnum() or c in (' ', '-', '_'))[:10]
-                    filename = f"Key_R{kle_key.row}_{i+1:02d}_{safe_label}"
-                    base_path = os.path.join(path, filename)
-                    
-                    k_success, t_success = export_keycap_and_text(keycap_model, text_model, base_path)
-                    if k_success:
-                        success_count += 1
-            
-            self.progress_bar.setVisible(False)
-            self.status_bar.showMessage(f"导出完成：成功 {success_count}/{len(kle_keys)} 个按键")
-            QMessageBox.information(self, "导出完成", f"已导出 {success_count} 个按键到:\n{path}")
+
+        thread = BatchExportThread(
+            mode, path, kle_keys, batch_configs,
+            default_geometry, default_font,
+            row_spacing, col_spacing, row_heights, use_height_profile
+        )
+        thread.progress.connect(self._on_batch_export_progress)
+        thread.progress_message.connect(self.status_bar.showMessage)
+        thread.finished.connect(self._on_batch_export_finished)
+        thread.error.connect(self._on_batch_export_error)
+        self._batch_export_thread = thread
+        thread.start()
+
+    def _on_batch_export_progress(self, current: int, total: int):
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(current)
+
+    def _on_batch_export_finished(self, success: bool, detail_msg: str, status_msg: str):
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage(status_msg)
+        if success:
+            QMessageBox.information(self, "导出完成", detail_msg)
         else:
-            # 合并导出（摆盘）
-            # 获取间距设置（直接从控件获取，确保是最新值）
-            row_spacing = getattr(self.batch_panel, 'row_spacing', 2.0)
-            col_spacing = getattr(self.batch_panel, 'col_spacing', 2.0)
-            
-            # 调试：检查间距值
-            print("=" * 60)
-            print(f"【间距设置检查】")
-            print(f"  row_spacing 属性值: {getattr(self.batch_panel, 'row_spacing', 'NOT FOUND')}")
-            print(f"  col_spacing 属性值: {getattr(self.batch_panel, 'col_spacing', 'NOT FOUND')}")
-            print(f"  最终使用值: 行间距={row_spacing}mm, 列间距={col_spacing}mm")
-            print("=" * 60)
-            
-            from core.keycap_presets import u_to_mm
-            
-            # 按照KLE坐标排序（先按y坐标，再按x坐标）
-            # 这样可以确保按键按照正确的行列顺序排列
-            sorted_keys = sorted(kle_keys, key=lambda k: (k.y, k.x))
-            
-            # 收集所有模型并计算位置（使用间距重新计算）
-            all_keycaps = []
-            all_texts = []
-            
-            # 按行分组按键
-            rows = {}
-            for kle_key in sorted_keys:
-                row_y = kle_key.y
-                if row_y not in rows:
-                    rows[row_y] = []
-                rows[row_y].append(kle_key)
-            
-            # 按y坐标排序行
-            sorted_rows = sorted(rows.keys())
-            
-            # 计算第一行的起始y位置（所有按键中最高的）
-            first_row_max_height = 0.0
-            if sorted_rows:
-                first_row_keys = rows[sorted_rows[0]]
-                for key in first_row_keys:
-                    first_row_max_height = max(first_row_max_height, u_to_mm(key.height))
-            
-            current_y = first_row_max_height / 2  # 当前行的y位置（从顶部开始，考虑第一行高度）
-            max_row_height = 0.0
-            
-            for row_idx, row_y in enumerate(sorted_rows):
-                row_keys = sorted(rows[row_y], key=lambda k: k.x)  # 行内按键按x排序
-                current_x = 0.0  # 每行从x=0开始
-                
-                for i, kle_key in enumerate(row_keys):
-                    self.progress_bar.setValue(len(all_keycaps) + 1)
-                    self.status_bar.showMessage(f"正在生成按键 {len(all_keycaps) + 1}/{len(kle_keys)}...")
-                    
-                    # 为每个按键获取对应的配置
-                    batch_config = batch_configs.get(KeyTypeAnalyzer.get_signature_for_key(kle_key).to_string()) if batch_configs else None
-                    
-                    # 获取行高度设置（从batch_panel）
-                    row_heights = {}
-                    if hasattr(self.batch_panel, 'use_height_profile') and self.batch_panel.use_height_profile:
-                        row_heights = self.batch_panel.row_heights.copy()
-                    
-                    # 创建生成器（使用批量编辑配置或默认配置）
-                    if batch_config:
-                        global_geometry = batch_config.geometry
-                        
-                        # 应用行高度设置（如果启用）
-                        if row_heights and kle_key.y in row_heights:
-                            from copy import deepcopy
-                            geometry_copy = deepcopy(global_geometry)
-                            geometry_copy.key_depth = row_heights[kle_key.y]
-                            global_geometry = geometry_copy
-                        # 确保卫星轴参数被正确设置
-                        if not hasattr(global_geometry, 'stabilizer_enabled'):
-                            global_geometry.stabilizer_enabled = getattr(batch_config.geometry, 'stabilizer_enabled', False)
-                        if not hasattr(global_geometry, 'stabilizer_length'):
-                            global_geometry.stabilizer_length = getattr(batch_config.geometry, 'stabilizer_length', 50.0)
-                        legend_mapping = LegendMapping()
-                        for pos_idx, style in batch_config.text_styles.items():
-                            # 确保字体路径已设置
-                            if style.font_path is None:
-                                style.font_path = default_font
-                            legend_mapping.set_style(pos_idx, style)
-                    else:
-                        global_geometry = default_geometry
-                        
-                        # 应用行高度设置（如果启用）
-                        if row_heights and kle_key.y in row_heights:
-                            from copy import deepcopy
-                            geometry_copy = deepcopy(global_geometry)
-                            geometry_copy.key_depth = row_heights[kle_key.y]
-                            global_geometry = geometry_copy
-                        
-                        legend_mapping = LegendMapping.create_default()
-                        if default_font:
-                            for style in legend_mapping.mapping.values():
-                                if style.font_path is None:
-                                    style.font_path = default_font
-                    
-                    generator = BatchGenerator(global_geometry, legend_mapping)
-                    generator.set_default_font(default_font)
-                    
-                    keycap_model, text_model = generator.generate_single_key(kle_key)
-                    
-                    if keycap_model:
-                        key_width = u_to_mm(kle_key.width)
-                        key_height = u_to_mm(kle_key.height)
-                        
-                        # 计算按键中心位置（基于间距重新计算）
-                        key_center_x = current_x + key_width / 2
-                        key_center_y = current_y - key_height / 2  # Y轴向下
-                        
-                        # 调试输出：显示每个按键的位置和间距
-                        if len(all_keycaps) < 5:  # 输出前5个按键的详细信息
-                            print(f"【按键 {len(all_keycaps) + 1}】")
-                            print(f"  KLE坐标: x={kle_key.x:.2f}u, y={kle_key.y:.2f}u")
-                            print(f"  按键尺寸: {key_width:.2f}mm x {key_height:.2f}mm")
-                            print(f"  计算位置: center=({key_center_x:.2f}, {key_center_y:.2f})")
-                            print(f"  current_x={current_x:.2f}, col_spacing={col_spacing:.2f}mm")
-                        
-                        # 移动到摆盘位置
-                        keycap_pos = keycap_model.translate((key_center_x, key_center_y, 0))
-                        if text_model:
-                            text_pos = text_model.translate((key_center_x, key_center_y, 0))
-                        else:
-                            text_pos = None
-                        
-                        all_keycaps.append(keycap_pos)
-                        if text_pos:
-                            all_texts.append(text_pos)
-                        
-                        # 更新下一个按键的x位置（当前按键右侧 + 间距）
-                        # 注意：current_x是下一个按键的左侧位置
-                        old_current_x = current_x
-                        spacing_added = key_width + col_spacing
-                        current_x += spacing_added
-                        max_row_height = max(max_row_height, key_height)
-                        
-                        # 调试输出：显示更新后的current_x
-                        if len(all_keycaps) < 5:  # 输出前5个按键的详细信息
-                            print(f"  位置更新: current_x {old_current_x:.2f} -> {current_x:.2f} "
-                                  f"(增加 {key_width:.2f} + {col_spacing:.2f} = {spacing_added:.2f}mm)")
-                            print()
-                
-                # 换行：更新y位置
-                if row_idx < len(sorted_rows) - 1:  # 不是最后一行
-                    old_current_y = current_y
-                    current_y -= max_row_height + row_spacing
-                    print(f"  换行 {row_idx}->{row_idx+1}: current_y从 {old_current_y:.2f} 更新到 {current_y:.2f} "
-                          f"(减少 {max_row_height:.2f} + {row_spacing:.2f} = {max_row_height + row_spacing:.2f})")
-                    max_row_height = 0.0
-            
-            # 合并所有模型
-            if all_keycaps:
-                merged_keycap = all_keycaps[0]
-                for k in all_keycaps[1:]:
-                    merged_keycap = merged_keycap.union(k)
-                
-                merged_text = None
-                if all_texts:
-                    merged_text = all_texts[0]
-                    for t in all_texts[1:]:
-                        if t:
-                            merged_text = merged_text.union(t)
-                
-                # 导出
-                file_ext = os.path.splitext(path)[1].lower()
-                if file_ext == '.stl':
-                    # STL 需要分开导出
-                    base_path = os.path.splitext(path)[0]
-                    k_success, t_success = export_keycap_and_text(merged_keycap, merged_text, base_path)
-                    if k_success:
-                        QMessageBox.information(self, "导出成功", f"已导出合并文件到:\n{base_path}_keycap.stl\n{base_path}_text.stl")
-                elif file_ext in ['.step', '.stp']:
-                    from export.step_exporter import export_keycap_and_text as export_step_keycap_text
-                    base_path = os.path.splitext(path)[0]
-                    k_success, t_success = export_step_keycap_text(merged_keycap, merged_text, base_path)
-                    if k_success:
-                        QMessageBox.information(self, "导出成功", f"已导出合并文件到:\n{base_path}_keycap.step\n{base_path}_text.step")
-                elif file_ext == '.3mf':
-                    success = export_3mf(merged_keycap, merged_text, path)
-                    if success:
-                        QMessageBox.information(self, "导出成功", f"已导出合并文件到:\n{path}")
-                else:
-                    QMessageBox.warning(self, "错误", f"不支持的文件格式: {file_ext}")
-            
-            self.progress_bar.setVisible(False)
-            self.status_bar.showMessage("批量导出完成")
+            QMessageBox.warning(self, "导出完成", detail_msg)
+
+    def _on_batch_export_error(self, msg: str):
+        self.progress_bar.setVisible(False)
+        self.status_bar.showMessage("导出失败")
+        QMessageBox.critical(self, "导出失败", f"批量导出时发生错误:\n\n{msg}")
     
     def export_single_key_config(self):
         """导出单个按键配置"""
         from core.keycap_config import KeycapConfig
         from core.batch_generator import BatchGenerator
-        from core.legend_mapping import LegendMapping, LegendStyle, _calculate_base_position
+        from core.legend_mapping import LegendMapping, LegendStyle, _calculate_base_position, get_top_surface_size
         from core.parameters import KeycapDesign, TextParameters
         from core.key_type_analyzer import KeyTypeAnalyzer
         from core.keycap_presets import u_to_mm
@@ -1009,10 +943,17 @@ class MainWindow(QMainWindow):
                         key_width_mm = geometry.key_width
                         key_height_mm = geometry.key_height
                         single_params = self.parameter_panel.get_parameters()
-                        
+                        top_w, top_h = get_top_surface_size(
+                            key_width_mm, key_height_mm,
+                            geometry.key_depth,
+                            getattr(geometry, 'side_angle', 0.0) or 0.0
+                        )
                         for pos_idx in batch_config.key_type.label_positions:
                             style = batch_config.get_style_for_position(pos_idx, single_params.font_path)
-                            base_x, base_y = _calculate_base_position(pos_idx, key_width_mm, key_height_mm)
+                            base_x, base_y = _calculate_base_position(
+                                pos_idx, key_width_mm, key_height_mm,
+                                top_width=top_w, top_height=top_h
+                            )
                             text_param = TextParameters(
                                 text="X",  # 使用X作为占位符
                                 font_path=style.font_path,
@@ -1063,7 +1004,7 @@ class MainWindow(QMainWindow):
         """导出整套按键配置"""
         from core.keycap_config import KeycapConfig, KeycapConfigSet
         from core.batch_generator import BatchGenerator
-        from core.legend_mapping import LegendMapping, LegendStyle, _calculate_base_position
+        from core.legend_mapping import LegendMapping, LegendStyle, _calculate_base_position, get_top_surface_size
         from core.parameters import KeycapDesign, TextParameters
         from core.key_type_analyzer import KeyTypeAnalyzer
         from core.keycap_presets import u_to_mm
@@ -1093,11 +1034,15 @@ class MainWindow(QMainWindow):
                     geometry.key_width = u_to_mm(batch_config.key_type.width)
                     geometry.key_height = u_to_mm(batch_config.key_type.height)
                     
-                    # 创建文本参数（使用实际字符，而不是X）
+                    # 创建文本参数（使用实际字符，而不是X）；按顶面尺寸放置
                     text_items = []
                     key_width_mm = geometry.key_width
                     key_height_mm = geometry.key_height
-                    
+                    top_w, top_h = get_top_surface_size(
+                        key_width_mm, key_height_mm,
+                        geometry.key_depth,
+                        getattr(geometry, 'side_angle', 0.0) or 0.0
+                    )
                     for pos_idx in batch_config.key_type.label_positions:
                         # 获取该位置的字符（从示例按键）
                         if pos_idx < len(example_key.labels) and example_key.labels[pos_idx]:
@@ -1106,7 +1051,10 @@ class MainWindow(QMainWindow):
                             label_text = "X"  # 如果没有字符，使用X
                         
                         style = batch_config.get_style_for_position(pos_idx, default_font)
-                        base_x, base_y = _calculate_base_position(pos_idx, key_width_mm, key_height_mm)
+                        base_x, base_y = _calculate_base_position(
+                            pos_idx, key_width_mm, key_height_mm,
+                            top_width=top_w, top_height=top_h
+                        )
                         
                         text_param = TextParameters(
                             text=label_text,
@@ -1225,12 +1173,18 @@ class MainWindow(QMainWindow):
                     )
                     
                     # 将 TextParameters 转换为 LegendStyle
-                    # 需要根据位置索引匹配，并计算offset
-                    from core.legend_mapping import _calculate_base_position
+                    # 需要根据位置索引匹配，并计算offset（按顶面尺寸算 base，与导出时一致）
+                    from core.legend_mapping import _calculate_base_position, get_top_surface_size
                     from core.keycap_presets import u_to_mm
                     
                     key_width_mm = u_to_mm(config.key_type.width)
                     key_height_mm = u_to_mm(config.key_type.height)
+                    g = config.geometry
+                    top_w, top_h = get_top_surface_size(
+                        key_width_mm, key_height_mm,
+                        g.key_depth,
+                        getattr(g, 'side_angle', 0.0) or 0.0
+                    )
                     pos_indices = sorted(config.key_type.label_positions)
                     
                     # 为每个位置创建样式
@@ -1238,7 +1192,10 @@ class MainWindow(QMainWindow):
                         if i < len(config.text_items):
                             tp = config.text_items[i]
                             # 计算base_position
-                            base_x, base_y = _calculate_base_position(pos_idx, key_width_mm, key_height_mm)
+                            base_x, base_y = _calculate_base_position(
+                                pos_idx, key_width_mm, key_height_mm,
+                                top_width=top_w, top_height=top_h
+                            )
                             # 计算offset（从总offset中减去base_position）
                             offset_x = tp.offset_x - base_x
                             offset_y = tp.offset_y - base_y
@@ -1441,14 +1398,15 @@ class MainWindow(QMainWindow):
         if params.font_path:
             self.preview_2d_widget.set_font(params.font_path)
         
-        # 如果有选中的文字项，实时更新其大小
+        # 如果有选中的文字项，将左侧参数直接写回该字符，便于对已添加字符进行修改
         selected_index = self.preview_2d_widget.selected_index
         if selected_index >= 0 and selected_index < len(self.preview_2d_widget.text_items):
             item = self.preview_2d_widget.text_items[selected_index]
-            # 更新选中项的字体大小
+            item.text = params.letter or "A"
             item.font_size = params.text_height
+            item.x = params.text_offset_x
+            item.y = params.text_offset_y
             self.preview_2d_widget.update()
-            # 触发内容改变信号以触发自动更新
             self.preview_2d_widget.content_changed.emit()
             
         # 尝试自动更新
@@ -1467,6 +1425,12 @@ class MainWindow(QMainWindow):
         self.parameter_panel.params.letter = text
         self.parameter_panel.params.text_height = font_size
         
+        self.check_auto_update()
+    
+    def on_insert_image(self, path: str, size: float, scale: float = 1.0):
+        """插入图片到2D预览"""
+        depth = self.parameter_panel.params.text_depth
+        self.preview_2d_widget.add_image(path, size=size, depth=depth, scale=scale)
         self.check_auto_update()
     
     def on_text_position_changed(self, index: int, x: float, y: float):
@@ -1490,6 +1454,15 @@ class MainWindow(QMainWindow):
                 dy = item.y - gen_y
                 self.preview_widget.update_text_offset(dx, dy)
 
+    def on_2d_selection_changed(self, index: int):
+        """2D 预览中选中项改变时，将选中字符的参数同步到左侧参数面板"""
+        if index < 0 or index >= len(self.preview_2d_widget.text_items):
+            return
+        item = self.preview_2d_widget.text_items[index]
+        self.parameter_panel.set_parameters_for_text_item(
+            item.text, item.font_size, item.x, item.y
+        )
+
     def generate_model(self):
         """生成模型"""
         params = self.parameter_panel.get_parameters()
@@ -1500,34 +1473,44 @@ class MainWindow(QMainWindow):
             if font_path:
                 params.font_path = font_path
         
-        # 从2D预览同步所有文字项到参数
-        # 这解决了多文字生成问题，并确保位置与预览完全一致
+        # 从2D预览同步所有文字项到参数，字体设置（线宽、加粗、斜体、下划线）从面板取值
         params.text_items = []
+        stroke_width = self.parameter_panel.text_stroke_width_spin.value()
+        bold = self.parameter_panel.text_bold_check.isChecked()
+        italic = self.parameter_panel.text_italic_check.isChecked()
+        underline = self.parameter_panel.text_underline_check.isChecked()
         for item in self.preview_2d_widget.text_items:
-            # 创建 TextParameters 对象
             text_param = TextParameters(
                 text=item.text,
                 size=item.font_size,
                 offset_x=item.x,
                 offset_y=item.y,
-                # 默认深度为参数面板中的设置
                 depth=params.text_depth,
-                # 重要：必须设置字体路径（使用 params.font_path，如果为空则尝试从面板获取）
+                stroke_width=stroke_width,
+                bold=bold,
+                italic=italic,
+                underline=underline,
                 font_path=params.font_path or (self.parameter_panel.font_combo.currentData() if self.parameter_panel.font_combo.currentIndex() >= 0 else None)
             )
             params.text_items.append(text_param)
         
-        # 如果没有 text_items，但 letter 有值，创建一个默认项
-        if not params.text_items and params.letter:
-            text_param = TextParameters(
-                text=params.letter,
-                size=params.text_height,
-                offset_x=params.text_offset_x,
-                offset_y=params.text_offset_y,
-                depth=params.text_depth,
-                font_path=params.font_path or (self.parameter_panel.font_combo.currentData() if self.parameter_panel.font_combo.currentIndex() >= 0 else None)
+        # 2D 预览为文字来源：若 2D 已清空所有文字则不再用 letter 补默认项，避免 3D 出现多余的 A
+        # （旧逻辑：无 text_items 时用 letter 创建默认项，会在仅图片时产生 phantom "A"）
+        
+        # 从2D预览同步所有图片项到参数
+        params.image_items = []
+        for item in self.preview_2d_widget.image_items:
+            ip = ImageParameters(
+                path=item.path,
+                depth=item.depth,
+                offset_x=item.x,
+                offset_y=item.y,
+                size=item.size,
+                scale=getattr(item, "scale", 1.0) or 1.0,
+                threshold=item.threshold,
+                invert=item.invert,
             )
-            params.text_items.append(text_param)
+            params.image_items.append(ip)
         
         # 验证参数
         is_valid, error_msg = params.validate()
@@ -1546,17 +1529,18 @@ class MainWindow(QMainWindow):
         self.gen_thread.error.connect(self.on_generation_error)
         self.gen_thread.start()
     
-    def on_model_generated(self, keycap_model, text_model):
+    def on_model_generated(self, keycap_model, text_model, image_inlay=None):
         """模型生成完成"""
         self.current_keycap_model = keycap_model
         self.current_text_model = text_model
+        self.current_image_inlay = image_inlay
         
         # 记录生成时的文字位置，用于后续实时预览
         params = self.gen_thread.params
         self.last_generated_text_pos = (params.text_offset_x, params.text_offset_y)
         
         # 更新预览
-        self.preview_widget.update_model(keycap_model, text_model)
+        self.preview_widget.update_model(keycap_model, text_model, image_inlay)
         
         # 隐藏进度条
         self.progress_bar.setVisible(False)
@@ -1592,6 +1576,7 @@ class MainWindow(QMainWindow):
         
         self.current_keycap_model = None
         self.current_text_model = None
+        self.current_image_inlay = None
         self.last_generated_text_pos = None
         
         self.status_bar.showMessage("已重置")
@@ -1615,10 +1600,11 @@ class MainWindow(QMainWindow):
             base_path = file_path.rsplit('.', 1)[0]
             
             # 导出
-            keycap_success, text_success = export_stl_keycap_text(
+            keycap_success, text_success, inlay_success = export_stl_keycap_text(
                 self.current_keycap_model,
                 self.current_text_model,
-                base_path
+                base_path,
+                self.current_image_inlay
             )
             
             if keycap_success:
@@ -1627,7 +1613,10 @@ class MainWindow(QMainWindow):
                 
                 if text_success:
                     msg += f"\n文字模型已导出: {fname}_text.stl"
-                    msg += "\n\n【多色打印提示】\n请将这两个文件同时拖入切片软件（如选择“作为单一对象加载”），以进行多色打印设置。"
+                if inlay_success:
+                    msg += f"\n图片镶嵌体已导出: {fname}_inlay.stl"
+                if text_success or inlay_success:
+                    msg += "\n\n【多色打印提示】\n请将相关文件同时拖入切片软件（如选择“作为单一对象加载”），以进行多色打印设置。"
                     QMessageBox.information(self, "导出成功", msg)
                 else:
                     self.status_bar.showMessage(msg)
@@ -1653,10 +1642,11 @@ class MainWindow(QMainWindow):
             base_path = file_path.rsplit('.', 1)[0]
             
             # 导出
-            keycap_success, text_success = export_step_keycap_text(
+            keycap_success, text_success, inlay_success = export_step_keycap_text(
                 self.current_keycap_model,
                 self.current_text_model,
-                base_path
+                base_path,
+                self.current_image_inlay
             )
             
             if keycap_success:
@@ -1665,7 +1655,10 @@ class MainWindow(QMainWindow):
                 
                 if text_success:
                     msg += f"\n文字模型已导出: {fname}_text.step"
-                    msg += "\n\nSTEP文件也已拆分为两个独立文件以便于CAD处理。"
+                if inlay_success:
+                    msg += f"\n图片镶嵌体已导出: {fname}_inlay.step"
+                if text_success or inlay_success:
+                    msg += "\n\nSTEP文件也已拆分为独立文件以便于CAD处理。"
                     QMessageBox.information(self, "导出成功", msg)
                 else:
                     self.status_bar.showMessage(msg)
@@ -1695,15 +1688,22 @@ class MainWindow(QMainWindow):
             success = export_3mf(
                 self.current_keycap_model,
                 self.current_text_model,
-                file_path
+                file_path,
+                self.current_image_inlay
             )
             
             if success:
                 fname = os.path.basename(file_path)
                 msg = f"3MF文件已导出: {fname}\n\n"
                 msg += "【多色打印优势】\n"
-                msg += "✓ 单个文件包含按键和文字两个部件\n"
-                msg += "✓ 自动保留颜色信息（按键=深灰，文字=白色）\n"
+                msg += "✓ 单个文件包含按键、文字"
+                if self.current_image_inlay is not None:
+                    msg += "、图片镶嵌体"
+                msg += "等部件\n"
+                msg += "✓ 自动保留颜色信息（按键=深灰，文字=白色"
+                if self.current_image_inlay is not None:
+                    msg += "，镶嵌体=金/黄"
+                msg += "）\n"
                 msg += "✓ 直接拖入切片软件即可识别多部件\n"
                 msg += "✓ 无需手动对齐或合并文件"
                 QMessageBox.information(self, "导出成功", msg)

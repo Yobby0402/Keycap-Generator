@@ -30,125 +30,108 @@ class BatchPanel(QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # 1. 间距设置（样式映射已移至属性面板显示）
-        spacing_group = QGroupBox("模型间距设置")
+        """构建间距、操作按钮、高度类型三块子控件，供主窗口按新布局摆放。"""
+        # 1. 模型间距设置
+        self._spacing_widget = QGroupBox("模型间距设置")
         spacing_layout = QFormLayout()
-        spacing_layout.setSpacing(8)  # 增加间距
-        
-        # 行间距
+        spacing_layout.setSpacing(8)
         self.row_spacing_spin = QDoubleSpinBox()
         self.row_spacing_spin.setRange(0.0, 20.0)
         self.row_spacing_spin.setValue(self.row_spacing)
         self.row_spacing_spin.setDecimals(1)
         self.row_spacing_spin.setSuffix(" mm")
-        self.row_spacing_spin.setMinimumHeight(25)  # 增加控件高度
+        self.row_spacing_spin.setMinimumHeight(25)
         def update_row_spacing(v):
             self.row_spacing = v
             print(f"行间距已更新为: {v}mm")
         self.row_spacing_spin.valueChanged.connect(update_row_spacing)
         spacing_layout.addRow("行间距:", self.row_spacing_spin)
-        
-        # 列间距
         self.col_spacing_spin = QDoubleSpinBox()
         self.col_spacing_spin.setRange(0.0, 20.0)
         self.col_spacing_spin.setValue(self.col_spacing)
         self.col_spacing_spin.setDecimals(1)
         self.col_spacing_spin.setSuffix(" mm")
-        self.col_spacing_spin.setMinimumHeight(25)  # 增加控件高度
+        self.col_spacing_spin.setMinimumHeight(25)
         def update_col_spacing(v):
             self.col_spacing = v
             print(f"列间距已更新为: {v}mm")
         self.col_spacing_spin.valueChanged.connect(update_col_spacing)
         spacing_layout.addRow("列间距:", self.col_spacing_spin)
+        self._spacing_widget.setLayout(spacing_layout)
         
-        spacing_group.setLayout(spacing_layout)
-        layout.addWidget(spacing_group)
+        # 2. 高度类型设置（右侧下方用，改为上下布局）
+        self._height_widget = QGroupBox("高度类型设置")
+        height_main_layout = QVBoxLayout()  # 改为垂直布局
+        height_main_layout.setSpacing(8)
         
-        # 2. 高度类型设置（使用左右布局）
-        height_group = QGroupBox("高度类型设置")
-        height_main_layout = QHBoxLayout()  # 主布局：左右
-        
-        # 左侧：控制选项
-        left_control_layout = QVBoxLayout()
-        
-        # 启用高度类型覆盖
+        # 上方：控制选项（使用高度类型勾选 + 高度类型选择，宽度做小）
+        control_layout = QVBoxLayout()
         self.use_height_profile_check = QCheckBox("使用高度类型（覆盖单个按键的高度设置）")
         self.use_height_profile_check.setChecked(False)
         self.use_height_profile_check.stateChanged.connect(self.on_use_height_profile_changed)
-        left_control_layout.addWidget(self.use_height_profile_check)
+        control_layout.addWidget(self.use_height_profile_check)
         
-        # 高度类型选择
         profile_layout = QHBoxLayout()
         profile_label = QLabel("高度类型:")
-        profile_label.setMinimumWidth(80)  # 设置标签最小宽度
+        profile_label.setMinimumWidth(70)
         profile_layout.addWidget(profile_label)
         self.height_profile_combo = QComboBox()
         self.height_profile_combo.addItems(list(KEYCAP_HEIGHT_PROFILES.keys()))
         self.height_profile_combo.setCurrentText("Cherry高度")
         self.height_profile_combo.currentTextChanged.connect(self.on_height_profile_changed)
-        self.height_profile_combo.setMinimumHeight(25)  # 增加控件高度
-        profile_layout.addWidget(self.height_profile_combo)
-        left_control_layout.addLayout(profile_layout)
+        self.height_profile_combo.setMinimumHeight(25)
+        profile_layout.addWidget(self.height_profile_combo, stretch=1)
+        control_layout.addLayout(profile_layout)
         
-        left_control_layout.addStretch()
+        control_widget = QWidget()
+        control_widget.setLayout(control_layout)
+        control_widget.setMaximumWidth(280)  # 限制宽度，做小一些
+        height_main_layout.addWidget(control_widget)
         
-        # 右侧：行高度表格
-        right_table_layout = QVBoxLayout()
+        # 下方：各行高度设置表格
         table_label = QLabel("各行高度设置:")
         table_label.setStyleSheet("font-weight: bold;")
-        right_table_layout.addWidget(table_label)
+        height_main_layout.addWidget(table_label)
         self.row_height_table = QTableWidget()
         self.row_height_table.setColumnCount(3)
         self.row_height_table.setHorizontalHeaderLabels(["行号", "行标识", "高度 (mm)"])
         self.row_height_table.horizontalHeader().setStretchLastSection(True)
         self.row_height_table.setMinimumHeight(180)
         self.row_height_table.setMaximumHeight(350)
-        self.row_height_table.verticalHeader().setDefaultSectionSize(30)  # 增加行高
-        right_table_layout.addWidget(self.row_height_table)
+        self.row_height_table.verticalHeader().setDefaultSectionSize(30)
+        height_main_layout.addWidget(self.row_height_table, stretch=1)
         
-        # 将左右布局添加到主布局
-        left_widget = QWidget()
-        left_widget.setLayout(left_control_layout)
-        left_widget.setMaximumWidth(250)  # 限制左侧宽度
-        height_main_layout.addWidget(left_widget)
+        self._height_widget.setLayout(height_main_layout)
         
-        right_widget = QWidget()
-        right_widget.setLayout(right_table_layout)
-        height_main_layout.addWidget(right_widget, stretch=1)  # 右侧占据剩余空间
-        
-        height_group.setLayout(height_main_layout)
-        layout.addWidget(height_group)
-        
-        # 3. 操作区
-        action_group = QGroupBox("操作")
+        # 3. 操作区（三个按钮）
+        self._actions_widget = QGroupBox("操作")
         action_layout = QVBoxLayout()
-        action_layout.setSpacing(8)  # 增加间距
-        
-        btn_layout = QVBoxLayout()  # 改为垂直布局，按钮更大更容易点击
+        action_layout.setSpacing(8)
         self.gen_btn = QPushButton("生成当前选中 (预览)")
-        self.gen_btn.setMinimumHeight(35)  # 增加按钮高度
+        self.gen_btn.setMinimumHeight(35)
         self.gen_btn.clicked.connect(self.generate_batch_signal.emit)
-        btn_layout.addWidget(self.gen_btn)
-        
+        action_layout.addWidget(self.gen_btn)
         self.gen_all_btn = QPushButton("生成所有按键预览")
-        self.gen_all_btn.setMinimumHeight(35)  # 增加按钮高度
+        self.gen_all_btn.setMinimumHeight(35)
         self.gen_all_btn.clicked.connect(self.generate_all_signal.emit)
-        btn_layout.addWidget(self.gen_all_btn)
-        
+        action_layout.addWidget(self.gen_all_btn)
         self.export_all_btn = QPushButton("导出所有...")
-        self.export_all_btn.setMinimumHeight(35)  # 增加按钮高度
+        self.export_all_btn.setMinimumHeight(35)
         self.export_all_btn.clicked.connect(self.export_all_signal.emit)
-        btn_layout.addWidget(self.export_all_btn)
-        
-        action_layout.addLayout(btn_layout)
-        action_group.setLayout(action_layout)
-        layout.addWidget(action_group)
-        
-        layout.addStretch()
+        action_layout.addWidget(self.export_all_btn)
+        self._actions_widget.setLayout(action_layout)
+    
+    def get_spacing_widget(self):
+        """返回模型间距设置控件，供主窗口放入左侧上方。"""
+        return self._spacing_widget
+    
+    def get_actions_widget(self):
+        """返回操作按钮区域控件，供主窗口放入左侧中部。"""
+        return self._actions_widget
+    
+    def get_height_widget(self):
+        """返回高度类型设置控件，供主窗口放入右侧下方。"""
+        return self._height_widget
     
     def set_kle_keys(self, keys):
         """设置KLE按键列表，并更新行高度表格"""

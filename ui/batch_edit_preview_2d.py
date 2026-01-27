@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt, QRectF, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QFontMetrics
 from core.key_type_analyzer import KeyTypeSignature
 from core.batch_edit_config import BatchEditConfig
-from core.legend_mapping import _calculate_base_position
+from core.legend_mapping import _calculate_base_position, get_top_surface_size
 from core.keycap_presets import u_to_mm
 from typing import Optional
 
@@ -55,15 +55,23 @@ class BatchEditPreview2D(QWidget):
         self.key_type = key_type
         self.config = config
         
-        # 重建text_items
+        # 重建text_items（按顶面尺寸放置，避免侧面倾角导致字符超出顶面）
         self.text_items = []
         if key_type and config:
             key_width_mm = u_to_mm(key_type.width)
             key_height_mm = u_to_mm(key_type.height)
-            
+            g = config.geometry
+            top_w, top_h = get_top_surface_size(
+                key_width_mm, key_height_mm,
+                g.key_depth,
+                getattr(g, 'side_angle', 0.0) or 0.0
+            )
             for pos_idx in sorted(key_type.label_positions):
                 style = config.get_style_for_position(pos_idx)
-                base_x, base_y = _calculate_base_position(pos_idx, key_width_mm, key_height_mm)
+                base_x, base_y = _calculate_base_position(
+                    pos_idx, key_width_mm, key_height_mm,
+                    top_width=top_w, top_height=top_h
+                )
                 
                 # 创建TextItem
                 # _calculate_base_position返回的坐标是数学坐标系（Y向上为正）
@@ -299,13 +307,20 @@ class BatchEditPreview2D(QWidget):
                 item.x = new_x
                 item.y = new_y
                 
-                # 更新配置中的offset
+                # 更新配置中的offset（按顶面尺寸算 base，与 update_preview 一致）
                 if self.config:
                     pos_idx = item.pos_idx
+                    kw = u_to_mm(self.key_type.width)
+                    kh = u_to_mm(self.key_type.height)
+                    g = self.config.geometry
+                    top_w, top_h = get_top_surface_size(
+                        kw, kh,
+                        g.key_depth,
+                        getattr(g, 'side_angle', 0.0) or 0.0
+                    )
                     base_x, base_y = _calculate_base_position(
-                        pos_idx, 
-                        u_to_mm(self.key_type.width), 
-                        u_to_mm(self.key_type.height)
+                        pos_idx, kw, kh,
+                        top_width=top_w, top_height=top_h
                     )
                     # 计算新的offset
                     new_offset_x = new_x - base_x

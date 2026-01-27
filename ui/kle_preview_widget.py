@@ -1,11 +1,12 @@
 """
 KLE 布局 2D 预览控件
 """
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QWidget, QToolTip
 from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QPalette
 from typing import List, Optional
 from core.kle_parser import KLEKey
+from core.legend_mapping import KLE_POSITION_NAMES
 
 class KLEPreviewWidget(QWidget):
     """KLE 布局 2D 预览控件"""
@@ -23,30 +24,21 @@ class KLEPreviewWidget(QWidget):
         self.margin: float = 20.0
         # 初始间距设为0（u单位），等待set_spacing设置正确的值
         # 默认2.0 u单位相当于38.1mm，太大了
-        self.row_spacing: float = 0.0  # 行间距 (u单位，与KLE坐标系统一致)
-        self.col_spacing: float = 0.0  # 列间距 (u单位)
-        self.key_display_positions: dict = {}  # {key_index: (display_x, display_y)} 存储应用间距后的显示位置
+        # 2D 预览固定使用 0 间距，仅反映键盘形状；模型间距只影响 3D 生成
+        self._preview_row_spacing: float = 0.0
+        self._preview_col_spacing: float = 0.0
+        self.key_display_positions: dict = {}  # {key_index: (display_x, display_y)}
         self.setMouseTracking(True)
         self.setBackgroundRole(QPalette.NoRole)
     
     def set_spacing(self, row_spacing: float, col_spacing: float):
-        """设置间距（mm单位，内部转换为u单位）"""
-        from core.keycap_presets import mm_to_u
-        self.row_spacing = mm_to_u(row_spacing)
-        self.col_spacing = mm_to_u(col_spacing)
-        self.update()
+        """设置间距（mm 单位）。仅保留接口兼容，2D 预览始终使用 0 间距，不影响布局。"""
+        pass
 
     def set_data(self, keys: List[KLEKey]):
         """设置数据"""
         self.keys = keys
         self.selected_index = -1
-        # 如果间距还没有被设置（仍然是初始值0.0），使用默认值
-        # 默认2.0mm转换为u单位（约0.105u）
-        if self.row_spacing == 0.0 and self.col_spacing == 0.0:
-            from core.keycap_presets import mm_to_u
-            self.row_spacing = mm_to_u(2.0)  # 默认2.0mm
-            self.col_spacing = mm_to_u(2.0)  # 默认2.0mm
-        # 强制重新计算缩放和显示位置
         self._calculate_scale()
         self.update()
         
@@ -78,29 +70,19 @@ class KLEPreviewWidget(QWidget):
         
         sorted_rows = sorted(rows.keys())
         
-        # Y轴向下（Qt屏幕坐标系），从顶部开始
+        # Y轴向下（Qt屏幕坐标系），从顶部开始；显示位置由 _calculate_scale 统一维护
         current_y = 0.0  # 第一行从Y=0开始（顶部）
         max_row_height = 0.0
-        
-        # 存储按键的显示位置映射（用于鼠标点击检测）
-        self.key_display_positions = {}  # {key_index: (display_x, display_y)}
         
         for row_idx, row_y in enumerate(sorted_rows):
             row_keys = sorted(rows[row_y], key=lambda k: k.x)
             current_x = 0.0  # 每行从x=0开始
             
             for key in row_keys:
-                # 计算按键显示位置（应用间距）
-                # current_y是当前行的顶部Y位置，按键的y位置就是current_y（按键顶部）
                 key_x = current_x
                 key_y = current_y  # 按键顶部位置
-                
-                # 绘制按键（使用计算后的位置）
                 key_index = self.keys.index(key) if key in self.keys else -1
                 if key_index >= 0:
-                    # 保存显示位置（保存按键左上角位置）
-                    self.key_display_positions[key_index] = (key_x, key_y)
-                    
                     # 创建临时按键对象用于绘制（避免修改原始数据）
                     temp_key = KLEKey(
                         x=key_x, y=key_y,
@@ -117,12 +99,12 @@ class KLEPreviewWidget(QWidget):
                     )
                     self._draw_key(painter, key_index, temp_key)
                 
-                # 更新下一个按键的x位置
-                current_x += key.width + self.col_spacing
+                # 更新下一个按键的x位置（2D 使用固定 0 间距）
+                current_x += key.width + self._preview_col_spacing
                 max_row_height = max(max_row_height, key.height)
             
-            # 换行：更新y位置（Y轴向下，所以加上）
-            current_y += max_row_height + self.row_spacing
+            # 换行：更新y位置（2D 使用固定 0 间距）
+            current_y += max_row_height + self._preview_row_spacing
             max_row_height = 0.0
             
     def _draw_key(self, painter: QPainter, index: int, key: KLEKey):
@@ -172,8 +154,8 @@ class KLEPreviewWidget(QWidget):
             key_w_px = key.width * self.scale_factor
             key_h_px = key.height * self.scale_factor
             
-            # 计算合适的字体大小（按键宽度的 25%，最小 6px，最大 20px）
-            font_size_px = max(6, min(20, int(key_w_px * 0.25)))
+            # 计算合适的字体大小（按键宽度的 38%，最小 9px，最大 32px，便于在 2D 预览中看清）
+            font_size_px = max(9, min(32, int(key_w_px * 0.38)))
             
             # 保存当前变换状态
             painter.save()
@@ -291,6 +273,7 @@ class KLEPreviewWidget(QWidget):
         max_x = 0.0
         min_y = 0.0
         max_y = 0.0
+        self.key_display_positions = {}
         
         for row_idx, row_y in enumerate(sorted_rows):
             row_keys = sorted(rows[row_y], key=lambda k: k.x)
@@ -300,6 +283,9 @@ class KLEPreviewWidget(QWidget):
                 # 计算按键显示位置
                 key_x = current_x
                 key_y = current_y  # 按键顶部位置
+                key_index = self.keys.index(key) if key in self.keys else -1
+                if key_index >= 0:
+                    self.key_display_positions[key_index] = (key_x, key_y)
                 
                 # 更新边界框
                 min_x = min(min_x, key_x)
@@ -307,12 +293,12 @@ class KLEPreviewWidget(QWidget):
                 min_y = min(min_y, key_y)
                 max_y = max(max_y, key_y + key.height)
                 
-                # 更新下一个按键的x位置
-                current_x += key.width + self.col_spacing
+                # 更新下一个按键的x位置（2D 固定 0 间距）
+                current_x += key.width + self._preview_col_spacing
                 max_row_height = max(max_row_height, key.height)
             
-            # 换行（Y轴向下，所以加上）
-            current_y += max_row_height + self.row_spacing
+            # 换行（2D 固定 0 间距）
+            current_y += max_row_height + self._preview_row_spacing
             max_row_height = 0.0
         
         content_w = max_x - min_x
@@ -331,36 +317,47 @@ class KLEPreviewWidget(QWidget):
         
         self.scale_factor = min(scale_x, scale_y)
     
-    def mousePressEvent(self, event):
-        """处理点击选中（考虑间距）"""
-        # 将鼠标坐标转换为逻辑坐标并查找按键
-        click_pos = event.pos()
-        # 转换为相对 margin 的坐标
-        mx = click_pos.x() - self.margin
-        my = click_pos.y() - self.margin
-        # 转换为 u 单位
+    def _key_index_at(self, u_x: float, u_y: float) -> int:
+        """根据逻辑坐标 (u 单位) 返回光标下的按键索引，若无则返回 -1。"""
+        self._calculate_scale()
+        for i, key in enumerate(self.keys):
+            if i in self.key_display_positions:
+                dx, dy = self.key_display_positions[i]
+                if dx <= u_x <= dx + key.width and dy <= u_y <= dy + key.height:
+                    return i
+        return -1
+    
+    def mouseMoveEvent(self, event):
+        """悬停时显示气泡，放大显示该按键上的字符。"""
+        mx = event.pos().x() - self.margin
+        my = event.pos().y() - self.margin
         u_x = mx / self.scale_factor
         u_y = my / self.scale_factor
-        
-        # 查找匹配的按键（使用应用间距后的显示位置）
-        found = -1
-        if hasattr(self, 'key_display_positions'):
-            for i, key in enumerate(self.keys):
-                if i in self.key_display_positions:
-                    display_x, display_y = self.key_display_positions[i]
-                    # 使用显示位置进行点击检测
-                    if (display_x <= u_x <= display_x + key.width and
-                        display_y <= u_y <= display_y + key.height):
-                        found = i
-                        break
+        idx = self._key_index_at(u_x, u_y)
+        if idx >= 0 and idx < len(self.keys):
+            key = self.keys[idx]
+            parts = []
+            for pos_idx, label in enumerate(key.labels or []):
+                if label and str(label).strip():
+                    pos_name = KLE_POSITION_NAMES.get(pos_idx, f"位置{pos_idx}")
+                    parts.append(f"{pos_name}: {label.strip()}")
+            if parts:
+                tip = "\n".join(parts)
+                g = self.mapToGlobal(event.pos())
+                QToolTip.showText(g, tip, self, self.rect(), 2000)
+            else:
+                QToolTip.hideText()
         else:
-            # 如果没有显示位置映射，使用原始位置（向后兼容）
-            for i, key in enumerate(self.keys):
-                if (key.x <= u_x <= key.x + key.width and
-                    key.y <= u_y <= key.y + key.height):
-                    found = i
-                    break # 找到顶层的一个（KLE 也是后绘制的在上面）
-        
+            QToolTip.hideText()
+        super().mouseMoveEvent(event)
+    
+    def mousePressEvent(self, event):
+        """处理点击选中"""
+        mx = event.pos().x() - self.margin
+        my = event.pos().y() - self.margin
+        u_x = mx / self.scale_factor
+        u_y = my / self.scale_factor
+        found = self._key_index_at(u_x, u_y)
         if found != -1:
             self.selected_index = found
             self.key_selected.emit(found)
@@ -371,21 +368,10 @@ class KLEPreviewWidget(QWidget):
     
     def mouseDoubleClickEvent(self, event):
         """处理双击事件 - 打开编辑对话框"""
-        # 复用点击检测逻辑
-        click_pos = event.pos()
-        mx = click_pos.x() - self.margin
-        my = click_pos.y() - self.margin
+        mx = event.pos().x() - self.margin
+        my = event.pos().y() - self.margin
         u_x = mx / self.scale_factor
         u_y = my / self.scale_factor
-        
-        # 查找匹配的按键
-        found = -1
-        for i, key in enumerate(self.keys):
-            if (key.x <= u_x <= key.x + key.width and
-                key.y <= u_y <= key.y + key.height):
-                found = i
-                break
-        
+        found = self._key_index_at(u_x, u_y)
         if found != -1:
-            # 发出双击信号
             self.key_double_clicked.emit(found)

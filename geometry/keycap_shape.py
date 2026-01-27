@@ -2,7 +2,7 @@
 按键形状定义和生成
 """
 import cadquery as cq
-from math import tan, radians, sqrt
+from math import tan, radians, sqrt, acos, sin, cos, pi
 from core.parameters import KeycapParameters
 
 
@@ -55,7 +55,88 @@ class KeycapShape:
                  .loft())
         
         # 合并顶面和侧面
-        keycap = top_face.union(sides)
+        try:
+            # 验证生成的形状是否有效
+            if top_face is None:
+                print("错误：顶面生成失败")
+                return None
+            
+            # 检查顶面是否有有效的形状
+            try:
+                top_face_val = top_face.val()
+                if top_face_val is None:
+                    print("错误：顶面形状为None")
+                    return None
+                
+                # 检查顶面的边界框（这会验证形状是否有效）
+                top_bbox = top_face_val.BoundingBox()
+                print(f"【顶面】边界框: X:[{top_bbox.xmin:.2f}, {top_bbox.xmax:.2f}], Y:[{top_bbox.ymin:.2f}, {top_bbox.ymax:.2f}], Z:[{top_bbox.zmin:.2f}, {top_bbox.zmax:.2f}]")
+                
+            except Exception as e:
+                print(f"错误：无法验证顶面形状: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            
+            # 检查侧面是否有有效的形状
+            try:
+                sides_val = sides.val()
+                if sides_val is None:
+                    print("错误：侧面形状为None")
+                    return None
+                
+                # 检查侧面的边界框
+                sides_bbox = sides_val.BoundingBox()
+                print(f"【侧面】边界框: X:[{sides_bbox.xmin:.2f}, {sides_bbox.xmax:.2f}], Y:[{sides_bbox.ymin:.2f}, {sides_bbox.ymax:.2f}], Z:[{sides_bbox.zmin:.2f}, {sides_bbox.zmax:.2f}]")
+                
+                # 检查顶面和侧面是否在Z=top_thickness处接触
+                if abs(top_bbox.zmax - sides_bbox.zmax) > 0.1:
+                    print(f"警告：顶面和侧面的顶部Z位置不匹配！顶面顶部Z={top_bbox.zmax:.2f}，侧面顶部Z={sides_bbox.zmax:.2f}")
+                
+            except Exception as e:
+                print(f"错误：无法验证侧面形状: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            
+            # 执行union操作
+            print(f"【合并】开始合并顶面和侧面...")
+            print(f"【合并】顶面Z范围: [{top_bbox.zmin:.2f}, {top_bbox.zmax:.2f}]")
+            print(f"【合并】侧面Z范围: [{sides_bbox.zmin:.2f}, {sides_bbox.zmax:.2f}]")
+            print(f"【合并】期望：顶面顶部Z={top_thickness:.2f}，侧面顶部Z={top_thickness:.2f}")
+            
+            # 检查是否有重叠
+            z_overlap = min(top_bbox.zmax, sides_bbox.zmax) - max(top_bbox.zmin, sides_bbox.zmin)
+            if z_overlap < 0:
+                print(f"【合并】警告：顶面和侧面在Z方向没有重叠！重叠={z_overlap:.2f}mm")
+                print(f"【合并】尝试调整侧面位置...")
+                # 可能需要调整侧面的位置，但先尝试union看看
+            
+            keycap = top_face.union(sides)
+            print(f"【合并】合并成功")
+            
+            # 验证union后的形状
+            try:
+                keycap_val = keycap.val()
+                if keycap_val is None:
+                    print("错误：union后的形状为None")
+                    # 尝试只返回顶面
+                    return top_face
+                
+                # 检查union后的边界框
+                keycap_bbox = keycap_val.BoundingBox()
+                print(f"【合并后】边界框: X:[{keycap_bbox.xmin:.2f}, {keycap_bbox.xmax:.2f}], Y:[{keycap_bbox.ymin:.2f}, {keycap_bbox.ymax:.2f}], Z:[{keycap_bbox.zmin:.2f}, {keycap_bbox.zmax:.2f}]")
+                
+            except Exception as e:
+                print(f"警告：无法验证union后的形状: {e}，继续处理")
+                
+        except Exception as e:
+            print(f"错误：合并顶面和侧面时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            # 如果union失败，尝试只返回顶面
+            print("警告：union失败，只返回顶面")
+            return top_face
         
         # 3. 创建内部空腔（用于挖空，创建壁厚）
         # 计算内部尺寸（确保内部尺寸合理，不会导致空腔创建失败）
@@ -205,33 +286,445 @@ class KeycapShape:
         else:
             print("【卫星轴】未启用，跳过")
         
+        # 6. 添加弧面（若 skip_curved 则由调用方在弧面体上做文字布尔后再合并）
+        self._top_w, self._top_h, self._top_thickness = top_w, top_h, top_thickness
+        skip_curved = getattr(self, '_skip_curved_this_build', False)
+        if not skip_curved:
+            keycap = self._apply_curved_top(keycap, top_w, top_h, top_thickness)
+        
         return keycap
+    
+    def build_curved_surface_only(self, top_w: float = None, top_h: float = None, top_thickness: float = None):
+        """
+        仅生成弧面体，不合并到键帽。用于“先对弧面做文字布尔，再与键帽合并”，使文字顶面/底面完全贴合弧面。
+        返回 (curved_part, is_convex)。无弧面时为 (None, False)。
+        """
+        tw = top_w if top_w is not None else getattr(self, '_top_w', None)
+        th = top_h if top_h is not None else getattr(self, '_top_h', None)
+        tt = top_thickness if top_thickness is not None else getattr(self, '_top_thickness', None)
+        if tw is None or th is None or tt is None:
+            from math import tan, radians
+            w, h, d = self.params.key_width, self.params.key_height, self.params.key_depth
+            sa = radians(self.params.side_angle)
+            tw = w - 2 * d * tan(sa) if sa > 0 else w
+            th = h - 2 * d * tan(sa) if sa > 0 else h
+            tt = self.params.top_thickness
+        
+        enabled = getattr(self.params.geometry, 'curved_top_enabled', False)
+        cx = getattr(self.params.geometry, 'curved_top_x_enabled', False)
+        cy = getattr(self.params.geometry, 'curved_top_y_enabled', False)
+        rx = getattr(self.params.geometry, 'curved_top_x_radius', 90.0)
+        ry = getattr(self.params.geometry, 'curved_top_y_radius', 90.0)
+        is_convex = getattr(self.params.geometry, 'curved_top_direction', 'convex') == 'convex'
+        
+        if not enabled or (not cx and not cy):
+            return None, False
+        if cx and 2 * rx < tw:
+            return None, False
+        if cy and 2 * ry < th:
+            return None, False
+        
+        try:
+            if cx and cy:
+                chx, chy = tw / 2, th / 2
+                hx = sqrt(rx * rx - chx * chx)
+                hy = sqrt(ry * ry - chy * chy)
+                ax, ay = rx - hx, ry - hy
+                total_h = ax + ay
+                if is_convex:
+                    cx_z, cy_z = tt - hx, tt - hy
+                    cyl_x = (cq.Workplane("XZ").workplane(offset=0).center(0, cx_z).circle(rx).extrude(th * 2, both=True))
+                    cyl_y = (cq.Workplane("YZ").workplane(offset=0).center(0, cy_z).circle(ry).extrude(tw * 2, both=True))
+                    body = cyl_x.intersect(cyl_y)
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(total_h + 0.5))
+                else:
+                    cx_z, cy_z = tt + hx, tt + hy
+                    ext = max(tw, th) * 2
+                    cyl_x = (cq.Workplane("XZ").workplane(offset=0).center(0, cx_z).circle(rx).extrude(ext, both=True))
+                    cyl_y = (cq.Workplane("YZ").workplane(offset=0).center(0, cy_z).circle(ry).extrude(ext, both=True))
+                    body = cyl_x.intersect(cyl_y)
+                    box = (cq.Workplane("XY").workplane(offset=tt - total_h - 0.5).rect(ext, ext).extrude(total_h + 0.5))
+                part = body.intersect(box)
+            elif cx:
+                ch = tw / 2
+                h = sqrt(rx * rx - ch * ch)
+                ah = rx - h
+                cz = tt - h if is_convex else tt + h
+                ext = max(th, tw) * 2 if not is_convex else th
+                cyl = (cq.Workplane("XZ").workplane(offset=0).center(0, cz).circle(rx).extrude(ext, both=True))
+                if is_convex:
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(ah + 0.1))
+                else:
+                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(tw, ext).extrude(ah + 0.2))
+                part = cyl.intersect(box)
+            else:
+                ch = th / 2
+                h = sqrt(ry * ry - ch * ch)
+                ah = ry - h
+                cz = tt - h if is_convex else tt + h
+                ext = max(tw, th) * 2 if not is_convex else tw
+                cyl = (cq.Workplane("YZ").workplane(offset=0).center(0, cz).circle(ry).extrude(ext, both=True))
+                if is_convex:
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(ah + 0.1))
+                else:
+                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(ext, th).extrude(ah + 0.2))
+                part = cyl.intersect(box)
+            
+            return part, is_convex
+        except Exception as e:
+            print(f"【弧面体】build_curved_surface_only 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, False
     
     def _create_top_surface(self, top_w: float, top_h: float, top_thickness: float) -> cq.Workplane:
         """
-        创建顶面（带圆角）
+        创建平面顶面
         
         参数:
-            top_w: 顶面宽度 (mm)
-            top_h: 顶面高度 (mm)
+            top_w: 顶面宽度 (mm) - 已考虑侧面斜角
+            top_h: 顶面高度 (mm) - 已考虑侧面斜角
             top_thickness: 顶面厚度 (mm)
         
         返回:
             CadQuery Workplane对象
         
         注意：顶面从Z=0向上挤出到Z=top_thickness
+        弧面处理在 _apply_curved_top 中进行（在键帽完成后）
         """
-        top_fillet_radius = getattr(self.params.geometry, 'top_fillet_radius', 0.0)
-        
-        # 创建基础矩形（从Z=0向上挤出到Z=top_thickness）
+        # 始终创建平面顶面，弧面处理在后续步骤中进行
         top_face = (cq.Workplane("XY")
                    .rect(top_w, top_h)
                    .extrude(top_thickness))
-        
-        # 注意：顶面圆角将在整个模型创建完成后应用（在内部空腔创建之后）
-        # 这样可以确保圆角应用到最终的模型上，而不是被后续操作影响
         return top_face
-
+    
+    def _apply_curved_top(self, keycap: cq.Workplane, top_w: float, top_h: float, top_thickness: float) -> cq.Workplane:
+        """
+        在完成的键帽上应用弧面
+        
+        通过布尔运算在顶面上添加（凸起）或删除（凹陷）弧面体
+        
+        参数:
+            keycap: 完成的键帽模型
+            top_w: 顶面宽度 (mm)
+            top_h: 顶面高度 (mm)
+            top_thickness: 顶面厚度 (mm)
+        """
+        # 检查是否启用弧面
+        curved_enabled = getattr(self.params.geometry, 'curved_top_enabled', False)
+        curved_x = getattr(self.params.geometry, 'curved_top_x_enabled', False)
+        curved_y = getattr(self.params.geometry, 'curved_top_y_enabled', False)
+        curved_x_radius = getattr(self.params.geometry, 'curved_top_x_radius', 90.0)
+        curved_y_radius = getattr(self.params.geometry, 'curved_top_y_radius', 90.0)
+        curved_direction = getattr(self.params.geometry, 'curved_top_direction', 'convex')
+        
+        print(f"【弧面处理】curved_enabled={curved_enabled}, curved_x={curved_x}, curved_y={curved_y}")
+        
+        if not curved_enabled or (not curved_x and not curved_y):
+            print("【弧面处理】未启用弧面，跳过")
+            return keycap
+        
+        is_convex = (curved_direction == "convex")
+        print(f"【弧面处理】方向: {'凸起' if is_convex else '凹陷'}")
+        
+        # 验证圆弧直径是否满足要求
+        if curved_x and 2 * curved_x_radius < top_w:
+            print(f"【弧面处理】警告：X方向圆弧直径({2*curved_x_radius:.2f}mm) < 顶面宽度({top_w:.2f}mm)，跳过弧面")
+            return keycap
+        if curved_y and 2 * curved_y_radius < top_h:
+            print(f"【弧面处理】警告：Y方向圆弧直径({2*curved_y_radius:.2f}mm) < 顶面高度({top_h:.2f}mm)，跳过弧面")
+            return keycap
+        
+        try:
+            if curved_x and curved_y:
+                # 双方向弧面
+                keycap = self._apply_double_curved(keycap, top_w, top_h, top_thickness,
+                                                   curved_x_radius, curved_y_radius, is_convex)
+            elif curved_x:
+                # X方向弧面
+                keycap = self._apply_x_curved(keycap, top_w, top_h, top_thickness,
+                                             curved_x_radius, is_convex)
+            elif curved_y:
+                # Y方向弧面
+                keycap = self._apply_y_curved(keycap, top_w, top_h, top_thickness,
+                                             curved_y_radius, is_convex)
+            
+            print("【弧面处理】完成")
+        except Exception as e:
+            print(f"【弧面处理】失败: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return keycap
+    
+    def _apply_x_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
+                        top_thickness: float, radius: float, is_convex: bool) -> cq.Workplane:
+        """
+        应用X方向弧面
+        创建一个圆柱形弧面体，然后通过布尔运算添加或删除
+        """
+        try:
+            # 计算弧面参数
+            chord_half = top_w / 2  # 弦长的一半
+            h = sqrt(radius * radius - chord_half * chord_half)  # 弦到圆心的距离
+            
+            # 弧高 = 圆心到弧的最高点距离 - 弦到圆心的距离
+            arc_height = radius - h
+            
+            print(f"【X方向弧面】半径={radius:.2f}mm, 弦长={top_w:.2f}mm, 弧高={arc_height:.2f}mm")
+            
+            # 创建圆柱体（在XZ平面，沿Y方向拉伸）
+            # 圆柱中心位置：
+            # - 对于凸起：圆心在Z = top_thickness - h（圆弧向上凸起）
+            # - 对于凹陷：圆心在Z = top_thickness + h（圆弧向下凹陷）
+            
+            if is_convex:
+                # 凸起：创建圆柱体，然后与键帽取交集（只保留顶面范围内的部分）
+                # 圆柱中心在 Z = top_thickness - h
+                cylinder_center_z = top_thickness - h
+                
+                # 创建圆柱体（沿Y轴方向）
+                cylinder = (cq.Workplane("XZ")
+                           .workplane(offset=0)  # Y=0
+                           .center(0, cylinder_center_z)  # 圆心在(X=0, Z=cylinder_center_z)
+                           .circle(radius)
+                           .extrude(top_h, both=True))  # 沿Y方向拉伸
+                
+                # 创建裁剪盒：只保留顶面范围内的部分
+                # 范围：X从-top_w/2到top_w/2，Y从-top_h/2到top_h/2，Z从top_thickness到top_thickness+arc_height
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness)
+                           .rect(top_w, top_h)
+                           .extrude(arc_height + 0.1))
+                
+                # 取圆柱与裁剪盒的交集
+                curved_part = cylinder.intersect(clip_box)
+                
+                # 将弧面部分添加到键帽上
+                keycap = keycap.union(curved_part)
+                print(f"【X方向弧面】凸起弧面已添加")
+                
+            else:
+                # 凹陷：创建圆柱体，然后从键帽中减去
+                # 圆柱中心在 Z = top_thickness + h
+                cylinder_center_z = top_thickness + h
+                
+                # 创建圆柱体（沿Y轴方向）
+                # 拉伸长度需要足够大以穿透侧面
+                extrude_length = max(top_h, top_w) * 2
+                cylinder = (cq.Workplane("XZ")
+                           .workplane(offset=0)
+                           .center(0, cylinder_center_z)
+                           .circle(radius)
+                           .extrude(extrude_length, both=True))
+                
+                # 创建裁剪盒：X方向限制在顶面宽度内，Y方向足够大以穿透侧面
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness - arc_height - 0.1)
+                           .rect(top_w, extrude_length)
+                           .extrude(arc_height + 0.2))
+                
+                # 取圆柱与裁剪盒的交集
+                curved_part = cylinder.intersect(clip_box)
+                
+                # 从键帽中减去弧面部分
+                keycap = keycap.cut(curved_part)
+                print(f"【X方向弧面】凹陷弧面已减去")
+            
+            return keycap
+            
+        except Exception as e:
+            print(f"【X方向弧面】失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return keycap
+    
+    def _apply_y_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
+                        top_thickness: float, radius: float, is_convex: bool) -> cq.Workplane:
+        """
+        应用Y方向弧面
+        创建一个圆柱形弧面体，然后通过布尔运算添加或删除
+        """
+        try:
+            # 计算弧面参数
+            chord_half = top_h / 2  # 弦长的一半
+            h = sqrt(radius * radius - chord_half * chord_half)  # 弦到圆心的距离
+            
+            # 弧高 = 圆心到弧的最高点距离 - 弦到圆心的距离
+            arc_height = radius - h
+            
+            print(f"【Y方向弧面】半径={radius:.2f}mm, 弦长={top_h:.2f}mm, 弧高={arc_height:.2f}mm")
+            
+            if is_convex:
+                # 凸起：圆柱中心在 Z = top_thickness - h
+                cylinder_center_z = top_thickness - h
+                
+                # 创建圆柱体（沿X轴方向）
+                cylinder = (cq.Workplane("YZ")
+                           .workplane(offset=0)  # X=0
+                           .center(0, cylinder_center_z)  # 圆心在(Y=0, Z=cylinder_center_z)
+                           .circle(radius)
+                           .extrude(top_w, both=True))  # 沿X方向拉伸
+                
+                # 创建裁剪盒
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness)
+                           .rect(top_w, top_h)
+                           .extrude(arc_height + 0.1))
+                
+                # 取交集并添加到键帽
+                curved_part = cylinder.intersect(clip_box)
+                keycap = keycap.union(curved_part)
+                print(f"【Y方向弧面】凸起弧面已添加")
+                
+            else:
+                # 凹陷：圆柱中心在 Z = top_thickness + h
+                cylinder_center_z = top_thickness + h
+                
+                # 拉伸长度需要足够大以穿透侧面
+                extrude_length = max(top_w, top_h) * 2
+                cylinder = (cq.Workplane("YZ")
+                           .workplane(offset=0)
+                           .center(0, cylinder_center_z)
+                           .circle(radius)
+                           .extrude(extrude_length, both=True))
+                
+                # 创建裁剪盒：Y方向限制在顶面高度内，X方向足够大以穿透侧面
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness - arc_height - 0.1)
+                           .rect(extrude_length, top_h)
+                           .extrude(arc_height + 0.2))
+                
+                curved_part = cylinder.intersect(clip_box)
+                keycap = keycap.cut(curved_part)
+                print(f"【Y方向弧面】凹陷弧面已减去")
+            
+            return keycap
+            
+        except Exception as e:
+            print(f"【Y方向弧面】失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return keycap
+    
+    def _apply_double_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
+                             top_thickness: float, x_radius: float, y_radius: float, 
+                             is_convex: bool) -> cq.Workplane:
+        """
+        应用双方向弧面（使用两个圆柱面的交集实现平滑过渡）
+        
+        这种方法生成的曲面在X方向是圆弧，在Y方向也是圆弧，
+        且能完整覆盖整个矩形顶面，过渡平滑无交叉痕迹
+        """
+        try:
+            print(f"【双方向弧面】开始处理...")
+            print(f"【双方向弧面】顶面尺寸={top_w:.2f}x{top_h:.2f}mm")
+            print(f"【双方向弧面】X半径={x_radius:.2f}mm, Y半径={y_radius:.2f}mm")
+            
+            # 计算X方向弧面参数
+            chord_x_half = top_w / 2
+            h_x = sqrt(x_radius * x_radius - chord_x_half * chord_x_half)
+            arc_height_x = x_radius - h_x
+            
+            # 计算Y方向弧面参数
+            chord_y_half = top_h / 2
+            h_y = sqrt(y_radius * y_radius - chord_y_half * chord_y_half)
+            arc_height_y = y_radius - h_y
+            
+            # 总弧高（两个方向弧高的和）
+            total_arc_height = arc_height_x + arc_height_y
+            
+            print(f"【双方向弧面】弧高X={arc_height_x:.2f}mm, 弧高Y={arc_height_y:.2f}mm, 总弧高={total_arc_height:.2f}mm")
+            
+            if is_convex:
+                # 凸起模式：使用两个圆柱的交集
+                # X方向圆柱：圆心在 Z = top_thickness - h_x，轴沿Y方向
+                cylinder_x_center_z = top_thickness - h_x
+                # Y方向圆柱：圆心在 Z = top_thickness - h_y，轴沿X方向
+                cylinder_y_center_z = top_thickness - h_y
+                
+                # 创建X方向圆柱（沿Y轴方向）
+                cylinder_x = (cq.Workplane("XZ")
+                             .workplane(offset=0)
+                             .center(0, cylinder_x_center_z)
+                             .circle(x_radius)
+                             .extrude(top_h * 2, both=True))
+                
+                # 创建Y方向圆柱（沿X轴方向）
+                cylinder_y = (cq.Workplane("YZ")
+                             .workplane(offset=0)
+                             .center(0, cylinder_y_center_z)
+                             .circle(y_radius)
+                             .extrude(top_w * 2, both=True))
+                
+                # 取两个圆柱的交集 - 这会产生一个双曲面形状
+                curved_body = cylinder_x.intersect(cylinder_y)
+                
+                # 创建裁剪盒：只保留顶面范围内、Z > top_thickness 的部分
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness)
+                           .rect(top_w, top_h)
+                           .extrude(total_arc_height + 0.5))
+                
+                # 取弧面体与裁剪盒的交集
+                curved_part = curved_body.intersect(clip_box)
+                
+                # 将弧面部分添加到键帽上
+                keycap = keycap.union(curved_part)
+                print(f"【双方向弧面】凸起双曲面已添加")
+                
+            else:
+                # 凹陷模式：使用两个圆柱的并集来切割
+                # X方向圆柱：圆心在 Z = top_thickness + h_x
+                cylinder_x_center_z = top_thickness + h_x
+                # Y方向圆柱：圆心在 Z = top_thickness + h_y
+                cylinder_y_center_z = top_thickness + h_y
+                
+                # 拉伸长度足够大以穿透侧面
+                extrude_length = max(top_w, top_h) * 2
+                
+                # 创建X方向圆柱
+                cylinder_x = (cq.Workplane("XZ")
+                             .workplane(offset=0)
+                             .center(0, cylinder_x_center_z)
+                             .circle(x_radius)
+                             .extrude(extrude_length, both=True))
+                
+                # 创建Y方向圆柱
+                cylinder_y = (cq.Workplane("YZ")
+                             .workplane(offset=0)
+                             .center(0, cylinder_y_center_z)
+                             .circle(y_radius)
+                             .extrude(extrude_length, both=True))
+                
+                # 取两个圆柱的交集 - 凹陷部分
+                curved_body = cylinder_x.intersect(cylinder_y)
+                
+                # 创建裁剪盒：足够大以穿透侧面
+                clip_box = (cq.Workplane("XY")
+                           .workplane(offset=top_thickness - total_arc_height - 0.5)
+                           .rect(extrude_length, extrude_length)
+                           .extrude(total_arc_height + 0.5))
+                
+                # 取弧面体与裁剪盒的交集
+                curved_part = curved_body.intersect(clip_box)
+                
+                # 从键帽中减去弧面部分
+                keycap = keycap.cut(curved_part)
+                print(f"【双方向弧面】凹陷双曲面已减去")
+            
+            return keycap
+            
+        except Exception as e:
+            print(f"【双方向弧面】双曲面方法失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 如果双曲面方法失败，回退到叠加方法
+            print(f"【双方向弧面】回退到叠加方法...")
+            keycap = self._apply_x_curved(keycap, top_w, top_h, top_thickness, x_radius, is_convex)
+            keycap = self._apply_y_curved(keycap, top_w, top_h, top_thickness, y_radius, is_convex)
+            return keycap
+    
     def _apply_edge_profile(self, keycap: cq.Workplane, z_target: float, bounds: dict,
                             edge_flags: dict, mode: str, radius: float, label: str) -> cq.Workplane:
         """按指定边缘应用圆角/倒角"""

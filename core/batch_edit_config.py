@@ -38,7 +38,11 @@ class BatchEditConfig:
                     offset_x=style.offset_x,
                     offset_y=style.offset_y,
                     depth=style.depth,
-                    rotation=style.rotation
+                    rotation=style.rotation,
+                    stroke_width=getattr(style, 'stroke_width', 0.0),
+                    bold=getattr(style, 'bold', False),
+                    italic=getattr(style, 'italic', False),
+                    underline=getattr(style, 'underline', False)
                 )
             return style
         else:

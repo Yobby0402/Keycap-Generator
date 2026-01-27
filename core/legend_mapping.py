@@ -26,6 +26,10 @@ class LegendStyle:
     offset_y: float = 0.0  # mm
     depth: float = 0.5  # mm (正值为凹陷，负值为凸起)
     rotation: float = 0.0  # 度
+    stroke_width: float = 0.0  # mm 线宽/描边加粗，>0 时向外扩展轮廓，避免细线打印被跳过
+    bold: bool = False      # 加粗（额外描边）
+    italic: bool = False   # 斜体（几何剪切）
+    underline: bool = False  # 下划线
 
 
 @dataclass
@@ -55,7 +59,11 @@ class LegendMapping:
                     offset_x=style.offset_x,
                     offset_y=style.offset_y,
                     depth=style.depth,
-                    rotation=style.rotation
+                    rotation=style.rotation,
+                    stroke_width=getattr(style, 'stroke_width', 0.0),
+                    bold=getattr(style, 'bold', False),
+                    italic=getattr(style, 'italic', False),
+                    underline=getattr(style, 'underline', False)
                 )
             return style
         else:
@@ -103,7 +111,9 @@ def convert_kle_label_to_text_params(
     legend_mapping: LegendMapping,
     default_font_path: Optional[str] = None,
     key_width: float = 18.0,
-    key_height: float = 18.0
+    key_height: float = 18.0,
+    top_width: Optional[float] = None,
+    top_height: Optional[float] = None
 ) -> Optional[TextParameters]:
     """
     将 KLE 标签转换为 TextParameters
@@ -115,6 +125,8 @@ def convert_kle_label_to_text_params(
         default_font_path: 默认字体路径
         key_width: 按键宽度 (mm)
         key_height: 按键高度 (mm)
+        top_width: 顶面宽度 (mm)，考虑侧面倾角后的顶面尺寸；不传则用 key_width
+        top_height: 顶面高度 (mm)；不传则用 key_height
     
     返回:
         TextParameters 对象，如果 label_text 为空则返回 None
@@ -130,37 +142,66 @@ def convert_kle_label_to_text_params(
     if not final_font_path:
         final_font_path = find_times_new_roman()
     
-    # 计算位置偏移（基于对齐方式）
+    # 计算位置偏移（基于对齐方式）；若提供顶面尺寸则按顶面放置，避免字符超出顶面
     # KLE 位置对齐方式：
     # 0-左上, 8-中上, 2-右上, 6-左中, 9-正中, 7-右中, 1-左下, 10-中下, 3-右下
     # 4-左侧(侧刻), 11-中间(侧刻), 5-右侧(侧刻)
     
-    base_x, base_y = _calculate_base_position(position_index, key_width, key_height)
+    base_x, base_y = _calculate_base_position(
+        position_index, key_width, key_height,
+        top_width=top_width, top_height=top_height
+    )
     
-    # 创建 TextParameters
+    # 创建 TextParameters（含线宽与样式）
+    stroke = getattr(style, 'stroke_width', 0.0)
     return TextParameters(
         text=label_text.strip(),
         font_path=final_font_path,
         size=style.size,
         depth=style.depth,
         offset_x=base_x + style.offset_x,
-        offset_y=base_y + style.offset_y
+        offset_y=base_y + style.offset_y,
+        stroke_width=stroke,
+        bold=getattr(style, 'bold', False),
+        italic=getattr(style, 'italic', False),
+        underline=getattr(style, 'underline', False)
     )
 
 
-def _calculate_base_position(position_index: int, key_width: float, key_height: float) -> tuple[float, float]:
+def get_top_surface_size(key_width: float, key_height: float, key_depth: float, side_angle_deg: float) -> tuple[float, float]:
     """
-    根据位置索引计算基础位置（对齐后的坐标）
+    根据侧面倾角计算顶面实际尺寸（顶面小于底面）。
+    返回 (top_width, top_height)，单位 mm。
+    """
+    from math import tan, radians
+    if side_angle_deg is None or side_angle_deg <= 0:
+        return key_width, key_height
+    s = radians(side_angle_deg)
+    d = key_depth or 0
+    top_w = key_width - 2 * d * tan(s) if d > 0 else key_width
+    top_h = key_height - 2 * d * tan(s) if d > 0 else key_height
+    return max(top_w, 0.1), max(top_h, 0.1)
+
+
+def _calculate_base_position(
+    position_index: int,
+    key_width: float,
+    key_height: float,
+    top_width: Optional[float] = None,
+    top_height: Optional[float] = None
+) -> tuple[float, float]:
+    """
+    根据位置索引计算基础位置（对齐后的坐标）。
+    若提供 top_width/top_height，则按顶面尺寸计算，使字符不超出实际顶面（考虑侧面倾角后顶面会缩小）。
     
     返回:
         (x, y) 坐标 (mm)，相对于按键中心
     """
-    # 按键中心为 (0, 0)
-    # 按键范围：x 从 -key_width/2 到 key_width/2
-    #          y 从 -key_height/2 到 key_height/2
-    
-    half_w = key_width / 2
-    half_h = key_height / 2
+    # 字符落在顶面上，应使用顶面尺寸作为有效范围
+    use_w = (top_width if top_width is not None and top_width > 0 else key_width)
+    use_h = (top_height if top_height is not None and top_height > 0 else key_height)
+    half_w = use_w / 2
+    half_h = use_h / 2
     
     # 位置映射（相对于中心）
     position_map = {

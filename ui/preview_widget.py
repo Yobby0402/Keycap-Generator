@@ -17,6 +17,7 @@ class PreviewWidget(QWidget):
         self.setup_ui()
         self.keycap_actor = None
         self.text_actor = None
+        self.image_inlay_actor = None
         self.all_keycap_actors = []  # 用于存储多个按键的actor
         self.all_text_actors = []  # 用于存储多个文字的actor
     
@@ -78,39 +79,51 @@ class PreviewWidget(QWidget):
             self.text_actor.SetPosition(dx, dy, 0)
             self.vtk_widget.GetRenderWindow().Render()
     
-    def update_model(self, keycap_model: cq.Workplane = None, 
-                     text_model: cq.Workplane = None):
+    def update_model(self, keycap_model: cq.Workplane = None,
+                     text_model: cq.Workplane = None,
+                     image_inlay: cq.Workplane = None):
         """
         更新显示的模型（单个按键）
-        
+
         参数:
             keycap_model: 按键模型
             text_model: 文字模型
+            image_inlay: 图片凹陷的镶嵌体（depth>0 时存在，用于双色打印）
         """
         # 清除现有模型
         if self.keycap_actor:
             self.renderer.RemoveActor(self.keycap_actor)
             self.keycap_actor = None
-        
+
         if self.text_actor:
             self.renderer.RemoveActor(self.text_actor)
             self.text_actor = None
-        
+
+        if self.image_inlay_actor:
+            self.renderer.RemoveActor(self.image_inlay_actor)
+            self.image_inlay_actor = None
+
         # 清除所有按键模型
         self.clear_all_models()
-        
+
         # 添加按键模型
         if keycap_model is not None:
             self.keycap_actor = self._cq_to_vtk_actor(keycap_model, color=(0.8, 0.8, 0.8))
             if self.keycap_actor:
                 self.renderer.AddActor(self.keycap_actor)
-        
+
         # 添加文字模型
         if text_model is not None:
             self.text_actor = self._cq_to_vtk_actor(text_model, color=(1.0, 0.0, 0.0))
             if self.text_actor:
                 self.renderer.AddActor(self.text_actor)
-        
+
+        # 添加图片镶嵌体（凹陷时填充用，金/黄色区分）
+        if image_inlay is not None:
+            self.image_inlay_actor = self._cq_to_vtk_actor(image_inlay, color=(0.9, 0.75, 0.2))
+            if self.image_inlay_actor:
+                self.renderer.AddActor(self.image_inlay_actor)
+
         # 重置相机并渲染
         self.renderer.ResetCamera()
         self.vtk_widget.GetRenderWindow().Render()
@@ -185,8 +198,10 @@ class PreviewWidget(QWidget):
                 tmp_path = tmp_file.name
             
             try:
-                # 导出为STL文件
-                cq.exporters.export(cq_object, tmp_path)
+                # 导出为STL文件（提高精度，使曲面更光滑）
+                # tolerance: 线性公差，越小越精确（默认0.1）
+                # angularTolerance: 角度公差，越小曲面越光滑（默认0.1弧度≈5.7度）
+                cq.exporters.export(cq_object, tmp_path, tolerance=0.01, angularTolerance=0.05)
                 
                 # 从文件读取STL
                 reader = vtk.vtkSTLReader()

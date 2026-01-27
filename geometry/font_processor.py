@@ -425,15 +425,13 @@ def _extract_multichar_outline(font, glyph_set, text: str) -> tuple:
     
     char_geometries = []
     current_x = 0.0
-    cmap = font.getBestCmap()
     
     for char in text:
         try:
             char_code = ord(char)
-            
-            # 查找字符映射
+            # 每个字符重新查找 cmap，避免上一字符使用的子集 cmap 导致本字符遗漏（对中文等多 Unicode 区块重要）
+            cmap = font.getBestCmap()
             if char_code not in cmap:
-                # 尝试查找备用 cmap
                 found = False
                 for table in font['cmap'].tables:
                     if char_code in table.cmap:
@@ -441,7 +439,7 @@ def _extract_multichar_outline(font, glyph_set, text: str) -> tuple:
                         found = True
                         break
                 if not found:
-                    print(f"字符 '{char}' (U+{char_code:04X}) 在字体中未找到，跳过")
+                    print(f"字符 '{char}' (U+{char_code:04X}) 在字体中未找到，跳过（请选用含该字符的字体，如思源黑体、Noto Sans CJK）")
                     continue
             
             glyph_name = cmap[char_code]

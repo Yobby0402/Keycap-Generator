@@ -68,6 +68,12 @@ class KeyPropertyPanel(QWidget):
         self.info_group.setLayout(self.info_layout)
         property_content_layout.addWidget(self.info_group)
         
+        # 按键上已有字符（选中键时直接可见，无需切到字符编辑）
+        self.chars_display_group = QGroupBox("按键字符")
+        self.chars_display_layout = QFormLayout()
+        self.chars_display_group.setLayout(self.chars_display_layout)
+        property_content_layout.addWidget(self.chars_display_group)
+        
         # 尺寸信息
         self.size_group = QGroupBox("尺寸")
         self.size_layout = QFormLayout()
@@ -163,6 +169,7 @@ class KeyPropertyPanel(QWidget):
     def show_empty_state(self):
         """显示空状态"""
         self.info_group.setVisible(False)
+        self.chars_display_group.setVisible(False)
         self.size_group.setVisible(False)
         self.style_group.setVisible(False)
         self.color_group.setVisible(False)
@@ -200,9 +207,28 @@ class KeyPropertyPanel(QWidget):
         
         # 清除旧内容（注意：必须在显示新内容之前清除）
         self._clear_layout(self.info_layout)
+        self._clear_layout(self.chars_display_layout)
         self._clear_layout(self.size_layout)
         self._clear_layout(self.style_layout)
         self._clear_layout(self.color_layout)
+        
+        # 按键上已有字符（非空位置 → 位置名: 字符）
+        parts = []
+        for pos_idx, label in enumerate(key.labels or []):
+            if label and str(label).strip():
+                pos_name = KLE_POSITION_NAMES.get(pos_idx, f"位置{pos_idx}")
+                parts.append(f"{pos_name}: {label.strip()}")
+        if parts:
+            chars_text = "\n".join(parts)
+            chars_lbl = QLabel(chars_text)
+            chars_lbl.setWordWrap(True)
+            chars_lbl.setStyleSheet("color: #333; font-size: 12px; padding: 4px 0;")
+            self.chars_display_layout.addRow(chars_lbl)
+        else:
+            none_lbl = QLabel("（无字符）")
+            none_lbl.setStyleSheet("color: #999; font-style: italic;")
+            self.chars_display_layout.addRow(none_lbl)
+        self.chars_display_group.setVisible(True)
         
         # 基本信息
         self._add_form_item(self.info_layout, "位置", f"({key.x:.2f}, {key.y:.2f}) u")

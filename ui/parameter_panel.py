@@ -4,12 +4,41 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QLineEdit, QDoubleSpinBox, QComboBox, QPushButton,
                              QGroupBox, QFileDialog, QMessageBox, QCheckBox,
-                             QFormLayout, QGridLayout)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QFormLayout, QGridLayout, QScrollArea)
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from core.parameters import KeycapParameters
 from core.keycap_presets import (STANDARD_KEY_SIZES, KEYCAP_HEIGHT_PROFILES,
                                  get_key_size_mm, get_keycap_height, u_to_mm)
 from utils.file_utils import get_system_fonts, get_font_name
+
+
+class CollapsibleGroupBox(QGroupBox):
+    """可折叠的QGroupBox"""
+    
+    def __init__(self, title="", parent=None):
+        super().__init__(title, parent)
+        self.setCheckable(True)
+        self.setChecked(True)  # 默认展开
+        self.toggled.connect(self._on_toggled)
+        self._max_height = None
+        
+    def _on_toggled(self, checked):
+        """切换折叠/展开状态"""
+        if checked:
+            # 展开：恢复最大高度
+            if self._max_height is not None:
+                self.setMaximumHeight(self._max_height)
+                self._max_height = None
+        else:
+            # 折叠：保存当前高度并设置为最小高度
+            if self._max_height is None:
+                self._max_height = self.maximumHeight()
+            # 设置最大高度为标题栏高度（约30-40px）
+            self.setMaximumHeight(40)
+    
+    def setCollapsed(self, collapsed):
+        """设置折叠状态"""
+        self.setChecked(not collapsed)
 
 
 class ParameterPanel(QWidget):
@@ -19,6 +48,8 @@ class ParameterPanel(QWidget):
     parameters_changed = pyqtSignal(KeycapParameters)
     # 信号：插入文字
     insert_text_signal = pyqtSignal(str, float)  # (text, font_size)
+    # 信号：插入图片 (path, size_mm, scale)
+    insert_image_signal = pyqtSignal(str, float, float)
     
     def __init__(self, parent=None, settings=None):
         super().__init__(parent)
@@ -31,12 +62,24 @@ class ParameterPanel(QWidget):
     
     def setup_ui(self):
         """设置UI"""
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(5, 5, 5, 5)
+        # 主布局
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(5, 5, 5, 5)
         
-        # 字体选择组
-        font_group = QGroupBox("字体设置")
+        # 创建滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # 内容widget
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 字体选择组（可折叠）
+        font_group = CollapsibleGroupBox("字体设置")
         font_layout = QVBoxLayout()
         
         # 字体选择
@@ -52,11 +95,11 @@ class ParameterPanel(QWidget):
         font_select_layout.addWidget(self.browse_font_btn)
         font_layout.addLayout(font_select_layout)
         
-        # 字母输入和插入按钮
+        # 文字输入和插入按钮（支持长文本与中文）
         letter_layout = QHBoxLayout()
-        letter_layout.addWidget(QLabel("字母:"))
+        letter_layout.addWidget(QLabel("文字:"))
         self.letter_edit = QLineEdit("A")
-        self.letter_edit.setMaxLength(1)
+        self.letter_edit.setPlaceholderText("支持长文本、中文、多字符")
         self.letter_edit.textChanged.connect(self.on_parameter_changed)
         letter_layout.addWidget(self.letter_edit)
         
@@ -66,11 +109,58 @@ class ParameterPanel(QWidget):
         letter_layout.addWidget(self.insert_text_btn)
         font_layout.addLayout(letter_layout)
         
-        font_group.setLayout(font_layout)
-        layout.addWidget(font_group)
+        # 字体样式：线宽、加粗、斜体、下划线（均在字体设置内）
+        font_style_layout = QHBoxLayout()
+        font_style_layout.addWidget(QLabel("线宽:"))
+        self.text_stroke_width_spin = QDoubleSpinBox()
+        self.text_stroke_width_spin.setRange(0.0, 2.0)
+        self.text_stroke_width_spin.setValue(0.0)
+        self.text_stroke_width_spin.setDecimals(2)
+        self.text_stroke_width_spin.setSuffix(" mm")
+        self.text_stroke_width_spin.setToolTip(">0 时向外加粗轮廓，避免细字体打印被切片软件跳过")
+        self.text_stroke_width_spin.valueChanged.connect(self.on_parameter_changed)
+        font_style_layout.addWidget(self.text_stroke_width_spin)
+        self.text_bold_check = QCheckBox("加粗")
+        self.text_bold_check.setToolTip("额外描边加粗")
+        self.text_bold_check.stateChanged.connect(self.on_parameter_changed)
+        font_style_layout.addWidget(self.text_bold_check)
+        self.text_italic_check = QCheckBox("斜体")
+        self.text_italic_check.setToolTip("几何剪切为斜体")
+        self.text_italic_check.stateChanged.connect(self.on_parameter_changed)
+        font_style_layout.addWidget(self.text_italic_check)
+        self.text_underline_check = QCheckBox("下划线")
+        self.text_underline_check.stateChanged.connect(self.on_parameter_changed)
+        font_style_layout.addWidget(self.text_underline_check)
+        font_style_layout.addStretch()
+        font_layout.addLayout(font_style_layout)
         
-        # 按键尺寸预设组
-        size_preset_group = QGroupBox("按键尺寸预设")
+        # 插入图片行
+        image_layout = QHBoxLayout()
+        self.insert_image_btn = QPushButton("插入图片")
+        self.insert_image_btn.clicked.connect(self.on_insert_image_clicked)
+        image_layout.addWidget(self.insert_image_btn)
+        image_layout.addWidget(QLabel("尺寸(mm):"))
+        self.insert_image_size_spin = QDoubleSpinBox()
+        self.insert_image_size_spin.setRange(1.0, 20.0)
+        self.insert_image_size_spin.setValue(6.0)
+        self.insert_image_size_spin.setDecimals(1)
+        self.insert_image_size_spin.setSuffix(" mm")
+        image_layout.addWidget(self.insert_image_size_spin)
+        image_layout.addWidget(QLabel("缩放:"))
+        self.insert_image_scale_spin = QDoubleSpinBox()
+        self.insert_image_scale_spin.setRange(0.2, 3.0)
+        self.insert_image_scale_spin.setValue(1.0)
+        self.insert_image_scale_spin.setDecimals(2)
+        self.insert_image_scale_spin.setSuffix(" x")
+        self.insert_image_scale_spin.setToolTip("1.0=100%，最终显示尺寸=尺寸×缩放")
+        image_layout.addWidget(self.insert_image_scale_spin)
+        font_layout.addLayout(image_layout)
+        
+        font_group.setLayout(font_layout)
+        content_layout.addWidget(font_group)
+        
+        # 按键尺寸预设组（可折叠）
+        size_preset_group = CollapsibleGroupBox("按键尺寸预设")
         size_preset_layout = QVBoxLayout()
         
         # 使用u单位复选框
@@ -89,10 +179,10 @@ class ParameterPanel(QWidget):
         size_preset_layout.addLayout(size_select_layout)
         
         size_preset_group.setLayout(size_preset_layout)
-        layout.addWidget(size_preset_group)
+        content_layout.addWidget(size_preset_group)
         
-        # 按键尺寸组
-        size_group = QGroupBox("按键尺寸")
+        # 按键尺寸组（可折叠）
+        size_group = CollapsibleGroupBox("按键尺寸")
         size_layout = QVBoxLayout()
         
         # 宽度
@@ -178,10 +268,10 @@ class ParameterPanel(QWidget):
         size_layout.addLayout(wall_layout)
         
         size_group.setLayout(size_layout)
-        layout.addWidget(size_group)
+        content_layout.addWidget(size_group)
         
-        # 斜角组
-        angle_group = QGroupBox("斜角 (度)")
+        # 斜角组（可折叠）
+        angle_group = CollapsibleGroupBox("斜角 (度)")
         angle_layout = QVBoxLayout()
 
         # 侧面斜角
@@ -197,10 +287,10 @@ class ParameterPanel(QWidget):
         angle_layout.addLayout(side_angle_layout)
         
         angle_group.setLayout(angle_layout)
-        layout.addWidget(angle_group)
+        content_layout.addWidget(angle_group)
         
-        # 边缘形状设置组
-        edge_group = QGroupBox("边缘形状设置")
+        # 边缘形状设置组（可折叠）
+        edge_group = CollapsibleGroupBox("边缘形状设置")
         edge_layout = QVBoxLayout()
 
         # 边缘类型
@@ -254,10 +344,67 @@ class ParameterPanel(QWidget):
         edge_layout.addLayout(edge_sides_layout)
 
         edge_group.setLayout(edge_layout)
-        layout.addWidget(edge_group)
+        content_layout.addWidget(edge_group)
         
-        # 文字参数组
-        text_group = QGroupBox("文字参数 (mm)")
+        # 弧面设置组（可折叠）
+        curved_group = CollapsibleGroupBox("弧面设置")
+        curved_layout = QVBoxLayout()
+        
+        # 启用弧面
+        self.curved_top_enabled_check = QCheckBox("启用弧面")
+        self.curved_top_enabled_check.setChecked(False)
+        self.curved_top_enabled_check.stateChanged.connect(self.on_parameter_changed)
+        curved_layout.addWidget(self.curved_top_enabled_check)
+        
+        # X方向弧面
+        x_curved_layout = QHBoxLayout()
+        self.curved_x_check = QCheckBox("X方向")
+        self.curved_x_check.setChecked(False)
+        self.curved_x_check.stateChanged.connect(self.on_parameter_changed)
+        x_curved_layout.addWidget(self.curved_x_check)
+        
+        x_curved_layout.addWidget(QLabel("半径:"))
+        self.curved_x_radius_spin = QDoubleSpinBox()
+        self.curved_x_radius_spin.setRange(10.0, 1000.0)
+        self.curved_x_radius_spin.setValue(90.0)
+        self.curved_x_radius_spin.setDecimals(1)
+        self.curved_x_radius_spin.setSuffix(" mm")
+        self.curved_x_radius_spin.valueChanged.connect(self.on_parameter_changed)
+        x_curved_layout.addWidget(self.curved_x_radius_spin)
+        curved_layout.addLayout(x_curved_layout)
+        
+        # Y方向弧面
+        y_curved_layout = QHBoxLayout()
+        self.curved_y_check = QCheckBox("Y方向")
+        self.curved_y_check.setChecked(False)
+        self.curved_y_check.stateChanged.connect(self.on_parameter_changed)
+        y_curved_layout.addWidget(self.curved_y_check)
+        
+        y_curved_layout.addWidget(QLabel("半径:"))
+        self.curved_y_radius_spin = QDoubleSpinBox()
+        self.curved_y_radius_spin.setRange(10.0, 1000.0)
+        self.curved_y_radius_spin.setValue(90.0)
+        self.curved_y_radius_spin.setDecimals(1)
+        self.curved_y_radius_spin.setSuffix(" mm")
+        self.curved_y_radius_spin.valueChanged.connect(self.on_parameter_changed)
+        y_curved_layout.addWidget(self.curved_y_radius_spin)
+        curved_layout.addLayout(y_curved_layout)
+        
+        # 弧面方向
+        direction_layout = QHBoxLayout()
+        direction_layout.addWidget(QLabel("方向:"))
+        self.curved_direction_combo = QComboBox()
+        self.curved_direction_combo.addItems(["向上凸起", "向下凹陷"])
+        self.curved_direction_combo.setCurrentText("向上凸起")
+        self.curved_direction_combo.currentTextChanged.connect(self.on_parameter_changed)
+        direction_layout.addWidget(self.curved_direction_combo)
+        curved_layout.addLayout(direction_layout)
+        
+        curved_group.setLayout(curved_layout)
+        content_layout.addWidget(curved_group)
+        
+        # 文字参数组（可折叠）
+        text_group = CollapsibleGroupBox("文字参数 (mm)")
         text_layout = QVBoxLayout()
         
         # 文字高度
@@ -286,10 +433,10 @@ class ParameterPanel(QWidget):
         text_layout.addLayout(text_depth_layout)
         
         text_group.setLayout(text_layout)
-        layout.addWidget(text_group)
+        content_layout.addWidget(text_group)
         
-        # 轴体类型和连接器设置
-        stem_group = QGroupBox("连接器设置")
+        # 轴体类型和连接器设置（可折叠）
+        stem_group = CollapsibleGroupBox("连接器设置")
         stem_layout = QVBoxLayout()
         
         # 启用连接器
@@ -355,10 +502,10 @@ class ParameterPanel(QWidget):
         stem_layout.addLayout(cross_layout)
         
         stem_group.setLayout(stem_layout)
-        layout.addWidget(stem_group)
+        content_layout.addWidget(stem_group)
 
-        # 卫星轴设置（单键）
-        stabilizer_group = QGroupBox("卫星轴设置")
+        # 卫星轴设置（单键，可折叠）
+        stabilizer_group = CollapsibleGroupBox("卫星轴设置")
         stabilizer_layout = QVBoxLayout()
 
         self.stabilizer_enabled_checkbox = QCheckBox("启用卫星轴连接器")
@@ -388,14 +535,19 @@ class ParameterPanel(QWidget):
         stabilizer_layout.addLayout(length_layout)
 
         stabilizer_group.setLayout(stabilizer_layout)
-        layout.addWidget(stabilizer_group)
+        content_layout.addWidget(stabilizer_group)
         
-        # 按钮
+        # 添加弹性空间
+        content_layout.addStretch()
+        
+        # 设置滚动区域的内容
+        scroll.setWidget(content_widget)
+        main_layout.addWidget(scroll)
+        
+        # 按钮（在滚动区域外）
         self.generate_btn = QPushButton("生成模型")
         self.generate_btn.setStyleSheet("font-weight: bold; padding: 5px;")
-        layout.addWidget(self.generate_btn)
-        
-        layout.addStretch()
+        main_layout.addWidget(self.generate_btn)
     
     def load_system_fonts(self):
         """加载系统字体"""
@@ -551,6 +703,10 @@ class ParameterPanel(QWidget):
         self.params.letter = self.letter_edit.text() or "A"
         self.params.text_height = self.text_height_spin.value()
         self.params.text_depth = self.text_depth_spin.value()
+        self.params.text_stroke_width = self.text_stroke_width_spin.value()
+        self.params.text_bold = self.text_bold_check.isChecked()
+        self.params.text_italic = self.text_italic_check.isChecked()
+        self.params.text_underline = self.text_underline_check.isChecked()
         self.params.stem_type = self.stem_combo.currentText()
         self.params.stem_enabled = self.stem_enabled_checkbox.isChecked()
         self.params.stem_height = self.stem_height_spin.value()
@@ -571,6 +727,15 @@ class ParameterPanel(QWidget):
         self.params.edge_profile_top = self.edge_top_check.isChecked()
         self.params.edge_profile_bottom = self.edge_bottom_check.isChecked()
 
+        # 弧面参数
+        self.params.curved_top_enabled = self.curved_top_enabled_check.isChecked()
+        self.params.curved_top_x_enabled = self.curved_x_check.isChecked()
+        self.params.curved_top_y_enabled = self.curved_y_check.isChecked()
+        self.params.curved_top_x_radius = self.curved_x_radius_spin.value()
+        self.params.curved_top_y_radius = self.curved_y_radius_spin.value()
+        direction_map = {"向上凸起": "convex", "向下凹陷": "concave"}
+        self.params.curved_top_direction = direction_map.get(self.curved_direction_combo.currentText(), "convex")
+
         # 卫星轴参数（单键）
         self.params.stabilizer_enabled = self.stabilizer_enabled_checkbox.isChecked()
         self.params.stabilizer_length = self.stabilizer_length_spin.value()
@@ -581,11 +746,37 @@ class ParameterPanel(QWidget):
         # 发出信号
         self.parameters_changed.emit(self.params)
     
+    def set_parameters_for_text_item(self, text: str, font_size: float, offset_x: float, offset_y: float):
+        """将左侧字符设计参数设为指定文字项的值（用于 2D 选中字符后同步到面板，不发出 parameters_changed）"""
+        self.letter_edit.blockSignals(True)
+        self.text_height_spin.blockSignals(True)
+        try:
+            self.letter_edit.setText(text if text else "A")
+            self.text_height_spin.setValue(float(font_size))
+            self.params.text_offset_x = float(offset_x)
+            self.params.text_offset_y = float(offset_y)
+        finally:
+            self.letter_edit.blockSignals(False)
+            self.text_height_spin.blockSignals(False)
+    
     def on_insert_text_clicked(self):
         """插入文字按钮点击"""
         text = self.letter_edit.text() or "A"
         font_size = self.text_height_spin.value()
         self.insert_text_signal.emit(text, font_size)
+    
+    def on_insert_image_clicked(self):
+        """插入图片按钮点击"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择图片",
+            "",
+            "图片 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*.*)"
+        )
+        if path:
+            size = self.insert_image_size_spin.value()
+            scale = self.insert_image_scale_spin.value()
+            self.insert_image_signal.emit(path, size, scale)
     
     def get_parameters(self) -> KeycapParameters:
         """获取当前参数"""

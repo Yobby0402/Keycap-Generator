@@ -33,16 +33,19 @@ def export_step(model: cq.Workplane, filepath: str) -> bool:
         return False
 
 
-def export_keycap_and_text(keycap_model: cq.Workplane, 
+def export_keycap_and_text(keycap_model: cq.Workplane,
                            text_model: cq.Workplane,
-                           base_path: str) -> tuple[bool, bool]:
+                           base_path: str,
+                           image_inlay: cq.Workplane = None) -> tuple:
     """
-    分别导出按键和文字模型
+    分别导出按键、文字和图片镶嵌体模型。
+    返回 (按键成功, 文字成功, 镶嵌体成功)。
     """
     keycap_path = f"{base_path}_keycap.step"
     text_path = f"{base_path}_text.step"
-    
+
     keycap_success = export_step(keycap_model, keycap_path) if keycap_model else False
     text_success = export_step(text_model, text_path) if text_model else False
-    
-    return keycap_success, text_success
+    inlay_success = export_step(image_inlay, f"{base_path}_inlay.step") if image_inlay else False
+
+    return keycap_success, text_success, inlay_success

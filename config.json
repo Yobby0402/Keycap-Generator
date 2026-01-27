@@ -9,5 +9,13 @@
   "default_side_angle": 10.0,
   "default_top_angle": 0.0,
   "default_top_fillet_radius": 0.0,
-  "default_side_fillet_radius": 0.0
+  "default_side_fillet_radius": 0.0,
+  "default_edge_profile_mode": "fillet",
+  "default_edge_profile_radius": 0.0,
+  "default_edge_profile_outer": true,
+  "default_edge_profile_inner": false,
+  "default_edge_profile_left": true,
+  "default_edge_profile_right": true,
+  "default_edge_profile_top": true,
+  "default_edge_profile_bottom": true
 }

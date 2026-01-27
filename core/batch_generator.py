@@ -7,7 +7,7 @@ import cadquery as cq
 from core.kle_parser import KLEKey
 from core.parameters import KeycapDesign, KeycapGeometry, TextParameters
 from core.keycap_modeler import KeycapModeler
-from core.legend_mapping import LegendMapping, convert_kle_label_to_text_params
+from core.legend_mapping import LegendMapping, convert_kle_label_to_text_params, get_top_surface_size
 from core.keycap_presets import u_to_mm
 
 class BatchGenerator:
@@ -74,15 +74,24 @@ class BatchGenerator:
             stem_cross_width=self.global_geometry.stem_cross_width,
             stem_cross_length=self.global_geometry.stem_cross_length,
             stabilizer_enabled=stabilizer_enabled,
-            stabilizer_length=stabilizer_length
+            stabilizer_length=stabilizer_length,
+            curved_top_enabled=getattr(self.global_geometry, 'curved_top_enabled', False),
+            curved_top_x_enabled=getattr(self.global_geometry, 'curved_top_x_enabled', False),
+            curved_top_y_enabled=getattr(self.global_geometry, 'curved_top_y_enabled', False),
+            curved_top_x_radius=getattr(self.global_geometry, 'curved_top_x_radius', 90.0),
+            curved_top_y_radius=getattr(self.global_geometry, 'curved_top_y_radius', 90.0),
+            curved_top_direction=getattr(self.global_geometry, 'curved_top_direction', 'convex')
         )
         print(f"  - 创建的geometry.stabilizer_enabled: {geometry.stabilizer_enabled}")
         print(f"  - 创建的geometry.stabilizer_length: {geometry.stabilizer_length}")
         
-        # 转换字符
+        # 转换字符（按顶面尺寸放置，避免侧面倾角导致字符超出顶面）
         text_items = []
         key_width_mm = u_to_mm(kle_key.width)
         key_height_mm = u_to_mm(kle_key.height)
+        key_depth = self.global_geometry.key_depth
+        side_angle = getattr(self.global_geometry, 'side_angle', 0.0) or 0.0
+        top_w, top_h = get_top_surface_size(key_width_mm, key_height_mm, key_depth, side_angle)
         
         for pos_idx, label_text in enumerate(kle_key.labels):
             if label_text and label_text.strip():
@@ -92,7 +101,9 @@ class BatchGenerator:
                     legend_mapping=self.legend_mapping,
                     default_font_path=self.default_font_path,
                     key_width=key_width_mm,
-                    key_height=key_height_mm
+                    key_height=key_height_mm,
+                    top_width=top_w,
+                    top_height=top_h
                 )
                 if text_param:
                     # 确保字体路径已设置（使用默认字体或Times New Roman）
@@ -122,7 +133,8 @@ class BatchGenerator:
         try:
             design = self.convert_kle_key_to_design(kle_key)
             modeler = KeycapModeler(design)
-            return modeler.generate()
+            keycap_model, text_model, _ = modeler.generate()  # 忽略 image_inlay
+            return keycap_model, text_model
         except Exception as e:
             print(f"生成按键失败 (位置 {kle_key.x:.1f}, {kle_key.y:.1f}): {e}")
             return None, None

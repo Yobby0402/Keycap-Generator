@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Any, Optional
 import json
-from core.parameters import KeycapGeometry, TextParameters, KeycapDesign
+from core.parameters import KeycapGeometry, TextParameters, ImageParameters, KeycapDesign
 from core.key_type_analyzer import KeyTypeSignature
 from core.kle_parser import KLEKey
 
@@ -16,17 +16,13 @@ class KeycapConfig:
     geometry: KeycapGeometry
     text_items: List[TextParameters]
     key_type: KeyTypeSignature  # 类型标识
+    image_items: List[ImageParameters] = field(default_factory=list)
     
     def to_dict(self) -> dict:
-        """
-        序列化为字典
-        
-        返回:
-            字典格式的配置数据
-        """
         return {
             "geometry": self._geometry_to_dict(self.geometry),
             "text_items": [self._text_params_to_dict(tp) for tp in self.text_items],
+            "image_items": [self._image_params_to_dict(ip) for ip in self.image_items],
             "key_type": {
                 "width": self.key_type.width,
                 "height": self.key_type.height,
@@ -36,25 +32,16 @@ class KeycapConfig:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'KeycapConfig':
-        """
-        从字典反序列化
-        
-        参数:
-            data: 字典格式的配置数据
-        
-        返回:
-            KeycapConfig 对象
-        """
         geometry = cls._geometry_from_dict(data["geometry"])
         text_items = [cls._text_params_from_dict(tp) for tp in data["text_items"]]
+        image_items = [cls._image_params_from_dict(ip) for ip in data.get("image_items", [])]
         key_type_data = data["key_type"]
         key_type = KeyTypeSignature(
             width=key_type_data["width"],
             height=key_type_data["height"],
             label_positions=set(key_type_data["label_positions"])
         )
-        
-        return cls(geometry=geometry, text_items=text_items, key_type=key_type)
+        return cls(geometry=geometry, text_items=text_items, key_type=key_type, image_items=image_items)
     
     @staticmethod
     def _geometry_to_dict(geometry: KeycapGeometry) -> dict:
@@ -75,6 +62,18 @@ class KeycapConfig:
     def _text_params_from_dict(data: dict) -> TextParameters:
         """从字典创建 TextParameters"""
         return TextParameters(**data)
+    
+    @staticmethod
+    def _image_params_to_dict(ip: ImageParameters) -> dict:
+        """将 ImageParameters 转换为字典"""
+        return asdict(ip)
+    
+    @staticmethod
+    def _image_params_from_dict(data: dict) -> ImageParameters:
+        """从字典创建 ImageParameters（兼容旧配置无 scale 时默认 1.0）"""
+        data = dict(data)
+        data.setdefault("scale", 1.0)
+        return ImageParameters(**data)
     
     def to_json(self, indent: int = 2) -> str:
         """
@@ -120,7 +119,8 @@ class KeycapConfig:
         return cls(
             geometry=design.geometry,
             text_items=design.text_items,
-            key_type=key_type
+            key_type=key_type,
+            image_items=getattr(design, 'image_items', None) or []
         )
 
 
