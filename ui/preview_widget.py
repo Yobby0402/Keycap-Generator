@@ -9,6 +9,14 @@ import cadquery as cq
 import numpy as np
 
 
+def _hex_to_rgb(hex_str):
+    """#RRGGBB -> (r,g,b) 0~1"""
+    h = (hex_str or "#cccccc").strip().lstrip("#")
+    if len(h) >= 6:
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
+    return (0.8, 0.8, 0.8)
+
+
 class PreviewWidget(QWidget):
     """3D模型预览组件"""
     
@@ -81,7 +89,9 @@ class PreviewWidget(QWidget):
     
     def update_model(self, keycap_model: cq.Workplane = None,
                      text_model: cq.Workplane = None,
-                     image_inlay: cq.Workplane = None):
+                     image_inlay: cq.Workplane = None,
+                     key_color: str = None,
+                     text_color: str = None):
         """
         更新显示的模型（单个按键）
 
@@ -89,6 +99,8 @@ class PreviewWidget(QWidget):
             keycap_model: 按键模型
             text_model: 文字模型
             image_inlay: 图片凹陷的镶嵌体（depth>0 时存在，用于双色打印）
+            key_color: 按键颜色 #RRGGBB，缺省灰
+            text_color: 文字颜色 #RRGGBB，缺省黑
         """
         # 清除现有模型
         if self.keycap_actor:
@@ -106,15 +118,18 @@ class PreviewWidget(QWidget):
         # 清除所有按键模型
         self.clear_all_models()
 
+        kc_rgb = _hex_to_rgb(key_color) if key_color else (0.8, 0.8, 0.8)
+        tc_rgb = _hex_to_rgb(text_color) if text_color else (0.0, 0.0, 0.0)
+
         # 添加按键模型
         if keycap_model is not None:
-            self.keycap_actor = self._cq_to_vtk_actor(keycap_model, color=(0.8, 0.8, 0.8))
+            self.keycap_actor = self._cq_to_vtk_actor(keycap_model, color=kc_rgb)
             if self.keycap_actor:
                 self.renderer.AddActor(self.keycap_actor)
 
         # 添加文字模型
         if text_model is not None:
-            self.text_actor = self._cq_to_vtk_actor(text_model, color=(1.0, 0.0, 0.0))
+            self.text_actor = self._cq_to_vtk_actor(text_model, color=tc_rgb)
             if self.text_actor:
                 self.renderer.AddActor(self.text_actor)
 
@@ -128,13 +143,16 @@ class PreviewWidget(QWidget):
         self.renderer.ResetCamera()
         self.vtk_widget.GetRenderWindow().Render()
     
-    def update_all_models(self, keycap_models: list, text_models: list):
+    def update_all_models(self, keycap_models: list, text_models: list,
+                          key_colors: list = None, text_colors: list = None):
         """
         更新显示所有按键的模型（批量预览）
         
         参数:
             keycap_models: 按键模型列表 [(model, position), ...]，position是(x, y, z)元组
-            text_models: 文字模型列表 [(model, position), ...]
+            text_models: 文字模型列表 [(model, position), ...]，与 keycap 一一对应
+            key_colors: 按键颜色列表 [#RRGGBB, ...]，缺省灰
+            text_colors: 文字颜色列表 [#RRGGBB, ...]，缺省黑
         """
         # 清除现有模型
         self.clear_all_models()
@@ -145,11 +163,16 @@ class PreviewWidget(QWidget):
             self.renderer.RemoveActor(self.text_actor)
             self.text_actor = None
         
+        key_colors = key_colors or []
+        text_colors = text_colors or []
+        
         # 添加所有按键模型
         self.all_keycap_actors = []
-        for model, pos in keycap_models:
+        for i, (model, pos) in enumerate(keycap_models):
             if model is not None:
-                actor = self._cq_to_vtk_actor(model, color=(0.8, 0.8, 0.8))
+                kc = key_colors[i] if i < len(key_colors) else None
+                rgb = _hex_to_rgb(kc) if kc else (0.8, 0.8, 0.8)
+                actor = self._cq_to_vtk_actor(model, color=rgb)
                 if actor:
                     actor.SetPosition(pos)
                     self.renderer.AddActor(actor)
@@ -157,9 +180,11 @@ class PreviewWidget(QWidget):
         
         # 添加所有文字模型
         self.all_text_actors = []
-        for model, pos in text_models:
+        for i, (model, pos) in enumerate(text_models):
             if model is not None:
-                actor = self._cq_to_vtk_actor(model, color=(1.0, 0.0, 0.0))
+                tc = text_colors[i] if i < len(text_colors) else None
+                rgb = _hex_to_rgb(tc) if tc else (0.0, 0.0, 0.0)
+                actor = self._cq_to_vtk_actor(model, color=rgb)
                 if actor:
                     actor.SetPosition(pos)
                     self.renderer.AddActor(actor)

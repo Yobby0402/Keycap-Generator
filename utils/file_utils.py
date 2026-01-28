@@ -53,51 +53,43 @@ def get_system_fonts() -> list[str]:
 
 
 def get_font_name(font_path: str) -> str:
-    """从字体文件路径提取字体名称 (优化版)"""
+    """从字体文件路径提取字体名称；若有中文名则优先显示中文名"""
     try:
         from fontTools.ttLib import TTFont
         
         font = TTFont(font_path)
         name_table = font['name']
         
-        # 候选列表
+        # 候选列表 (score, text)
         candidates = []
         
         for record in name_table.names:
-            # 仅关注 Family Name (1) 和 Preferred Family (16)
-            if record.nameID not in [1, 16]:
+            if record.nameID not in [1, 16]:  # Family (1), Preferred Family (16)
                 continue
-                
-            # 计算优先级分数
             score = 0
-            # 优先 Preferred Family (16)
             if record.nameID == 16:
                 score += 100
-            # 优先 Family (1)
             elif record.nameID == 1:
                 score += 50
-                
-            # 优先 Windows 平台 (3)
-            if record.platformID == 3:
+            if record.platformID == 3:  # Windows
                 score += 20
-            
-            # 优先 英语 (1033/0x409)
-            if record.langID == 0x409:
-                score += 10
+            # 优先中文：简体(0x804)、繁体(0x404)，其次英语(0x409)
+            if record.langID == 0x804:
+                score += 15  # 简体中文
+            elif record.langID == 0x404:
+                score += 12  # 繁体中文
+            elif record.langID == 0x409:
+                score += 10  # 英语
             
             try:
                 text = record.toUnicode()
                 candidates.append((score, text))
-            except:
+            except Exception:
                 continue
                 
         if candidates:
-            # 按分数降序
             candidates.sort(key=lambda x: x[0], reverse=True)
             return candidates[0][1]
-        
-        # 如果获取不到，使用文件名
         return os.path.splitext(os.path.basename(font_path))[0]
     except Exception:
-        # Fallback
         return os.path.splitext(os.path.basename(font_path))[0]

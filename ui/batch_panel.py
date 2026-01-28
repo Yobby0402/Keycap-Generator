@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, pyqtSignal
 from ui.kle_import_dialog import KLEImportDialog
 from core.keycap_presets import KEYCAP_HEIGHT_PROFILES, get_keycap_height
+from core.i18n import t
 
 class BatchPanel(QWidget):
     """批量生成参数面板"""
@@ -45,7 +46,8 @@ class BatchPanel(QWidget):
             self.row_spacing = v
             print(f"行间距已更新为: {v}mm")
         self.row_spacing_spin.valueChanged.connect(update_row_spacing)
-        spacing_layout.addRow("行间距:", self.row_spacing_spin)
+        self._row_spacing_label = QLabel("行间距:")
+        spacing_layout.addRow(self._row_spacing_label, self.row_spacing_spin)
         self.col_spacing_spin = QDoubleSpinBox()
         self.col_spacing_spin.setRange(0.0, 20.0)
         self.col_spacing_spin.setValue(self.col_spacing)
@@ -56,7 +58,8 @@ class BatchPanel(QWidget):
             self.col_spacing = v
             print(f"列间距已更新为: {v}mm")
         self.col_spacing_spin.valueChanged.connect(update_col_spacing)
-        spacing_layout.addRow("列间距:", self.col_spacing_spin)
+        self._col_spacing_label = QLabel("列间距:")
+        spacing_layout.addRow(self._col_spacing_label, self.col_spacing_spin)
         self._spacing_widget.setLayout(spacing_layout)
         
         # 2. 高度类型设置（右侧下方用，改为上下布局）
@@ -72,9 +75,9 @@ class BatchPanel(QWidget):
         control_layout.addWidget(self.use_height_profile_check)
         
         profile_layout = QHBoxLayout()
-        profile_label = QLabel("高度类型:")
-        profile_label.setMinimumWidth(70)
-        profile_layout.addWidget(profile_label)
+        self._profile_label = QLabel("高度类型:")
+        self._profile_label.setMinimumWidth(70)
+        profile_layout.addWidget(self._profile_label)
         self.height_profile_combo = QComboBox()
         self.height_profile_combo.addItems(list(KEYCAP_HEIGHT_PROFILES.keys()))
         self.height_profile_combo.setCurrentText("Cherry高度")
@@ -89,9 +92,9 @@ class BatchPanel(QWidget):
         height_main_layout.addWidget(control_widget)
         
         # 下方：各行高度设置表格
-        table_label = QLabel("各行高度设置:")
-        table_label.setStyleSheet("font-weight: bold;")
-        height_main_layout.addWidget(table_label)
+        self._table_label = QLabel("各行高度设置:")
+        self._table_label.setStyleSheet("font-weight: bold;")
+        height_main_layout.addWidget(self._table_label)
         self.row_height_table = QTableWidget()
         self.row_height_table.setColumnCount(3)
         self.row_height_table.setHorizontalHeaderLabels(["行号", "行标识", "高度 (mm)"])
@@ -120,6 +123,22 @@ class BatchPanel(QWidget):
         self.export_all_btn.clicked.connect(self.export_all_signal.emit)
         action_layout.addWidget(self.export_all_btn)
         self._actions_widget.setLayout(action_layout)
+    
+    def retranslate_ui(self):
+        """根据当前语言更新本面板文案"""
+        self._spacing_widget.setTitle(t("模型间距设置", "Model Spacing"))
+        self._row_spacing_label.setText(t("行间距:", "Row spacing:"))
+        self._col_spacing_label.setText(t("列间距:", "Col spacing:"))
+        self._height_widget.setTitle(t("高度类型设置", "Height Profile"))
+        self.use_height_profile_check.setText(t("使用高度类型（覆盖单个按键的高度设置）", "Use height profile (override per-key height)"))
+        self._profile_label.setText(t("高度类型:", "Height profile:"))
+        self._table_label.setText(t("各行高度设置:", "Row heights:"))
+        self.row_height_table.setHorizontalHeaderLabels([t("行号", "Row"), t("行标识", "Y"), t("高度 (mm)", "Height (mm)")])
+        self._actions_widget.setTitle(t("操作", "Actions"))
+        # 三个按钮文案由主窗口 retranslateUi 根据状态统一设置
+        self.gen_btn.setText(t("生成当前选中 (预览)", "Generate Selected (Preview)"))
+        self.gen_all_btn.setText(t("生成所有按键预览", "Generate All Keys"))
+        self.export_all_btn.setText(t("导出所有...", "Export All..."))
     
     def get_spacing_widget(self):
         """返回模型间距设置控件，供主窗口放入左侧上方。"""

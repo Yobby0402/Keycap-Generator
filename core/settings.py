@@ -36,14 +36,24 @@ class Settings:
                 "default_row": "R3",
                 # 默认按键参数
                 "default_side_angle": 0.0,
+                "side_angle_step": 0.5,
+                "default_wall_thickness": 1.0,
+                "wall_thickness_step": 0.1,
+                "default_stroke_width": 0.0,
+                "stroke_width_step": 0.05,
                 "default_edge_profile_mode": "fillet",
                 "default_edge_profile_radius": 0.0,
+                "edge_radius_step": 0.05,
                 "default_edge_profile_outer": True,
                 "default_edge_profile_inner": False,
                 "default_edge_profile_left": True,
                 "default_edge_profile_right": True,
                 "default_edge_profile_top": True,
                 "default_edge_profile_bottom": True,
+                "default_text_height": 3.0,
+                "text_height_step": 0.1,
+                "default_text_depth": 0.5,
+                "text_depth_step": 0.05,
             }
             self.save()
     
@@ -160,6 +170,66 @@ class Settings:
     def set_default_edge_profile_bottom(self, enabled: bool):
         """设置默认下边是否生效"""
         self.set("default_edge_profile_bottom", enabled)
+
+    def get_side_angle_step(self) -> float:
+        return self.get("side_angle_step", 0.5)
+
+    def set_side_angle_step(self, step: float):
+        self.set("side_angle_step", step)
+
+    def get_default_wall_thickness(self) -> float:
+        return self.get("default_wall_thickness", 1.0)
+
+    def set_default_wall_thickness(self, v: float):
+        self.set("default_wall_thickness", v)
+
+    def get_wall_thickness_step(self) -> float:
+        return self.get("wall_thickness_step", 0.1)
+
+    def set_wall_thickness_step(self, step: float):
+        self.set("wall_thickness_step", step)
+
+    def get_default_stroke_width(self) -> float:
+        return self.get("default_stroke_width", 0.0)
+
+    def set_default_stroke_width(self, v: float):
+        self.set("default_stroke_width", v)
+
+    def get_stroke_width_step(self) -> float:
+        return self.get("stroke_width_step", 0.05)
+
+    def set_stroke_width_step(self, step: float):
+        self.set("stroke_width_step", step)
+
+    def get_edge_radius_step(self) -> float:
+        return self.get("edge_radius_step", 0.05)
+
+    def set_edge_radius_step(self, step: float):
+        self.set("edge_radius_step", step)
+
+    def get_default_text_height(self) -> float:
+        return self.get("default_text_height", 3.0)
+
+    def set_default_text_height(self, v: float):
+        self.set("default_text_height", v)
+
+    def get_text_height_step(self) -> float:
+        return self.get("text_height_step", 0.1)
+
+    def set_text_height_step(self, step: float):
+        self.set("text_height_step", step)
+
+    def get_default_text_depth(self) -> float:
+        return self.get("default_text_depth", 0.5)
+
+    def set_default_text_depth(self, v: float):
+        self.set("default_text_depth", v)
+
+    def get_text_depth_step(self) -> float:
+        return self.get("text_depth_step", 0.05)
+
+    def set_text_depth_step(self, step: float):
+        self.set("text_depth_step", step)
     
     # 旧圆角默认参数已移除（改为边缘形状设置）
     
@@ -170,3 +240,11 @@ class Settings:
     def set_default_font_path(self, font_path: str):
         """设置默认字体路径"""
         self.set("default_font_path", font_path)
+
+    def get_language(self) -> str:
+        """界面语言：zh / en"""
+        return self.get("language", "zh")
+
+    def set_language(self, lang: str):
+        """设置界面语言"""
+        self.set("language", lang)

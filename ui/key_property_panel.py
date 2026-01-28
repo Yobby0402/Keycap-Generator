@@ -1,28 +1,59 @@
 """
 按键属性面板
-显示选中按键的属性信息，并支持编辑
+显示选中按键的属性信息，并支持编辑；多选时仅显示颜色批量设置
 """
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QGroupBox,
                              QFormLayout, QScrollArea, QPushButton, QLineEdit,
                              QDoubleSpinBox, QTableWidget, QTableWidgetItem,
-                             QStackedWidget, QHBoxLayout)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QStackedWidget, QHBoxLayout, QColorDialog, QComboBox)
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
+from PyQt5.QtGui import QColor, QIcon, QPixmap, QPainter, QPen, QBrush
 from core.kle_parser import KLEKey
 from core.legend_mapping import KLE_POSITION_NAMES
 from core.batch_edit_config import BatchEditConfig
-from typing import Optional
+from core.i18n import t
+from typing import Optional, List, Tuple
+import re
+
+
+def _scheme_preview_icon(key_hex: str, text_hex: str, width: int = 40, height: int = 18) -> QIcon:
+    """生成「按键色｜文字色」双色预览图标，便于从已有方案中直观选择。"""
+    pm = QPixmap(width, height)
+    pm.fill(Qt.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.Antialiasing)
+    try:
+        kc = QColor(key_hex or "#cccccc")
+        tc = QColor(text_hex or "#000000")
+        half = width // 2
+        painter.setPen(QPen(QColor("#888"), 1))
+        painter.setBrush(QBrush(kc))
+        painter.drawRect(0, 0, half - 1, height - 1)
+        painter.setBrush(QBrush(tc))
+        painter.drawRect(half, 0, half - 1, height - 1)
+    finally:
+        painter.end()
+    return QIcon(pm)
+
 
 class KeyPropertyPanel(QWidget):
-    """按键属性面板（支持编辑）"""
+    """按键属性面板（支持编辑；多选时仅颜色批量设置）"""
     
-    # 信号：数据更新
+    # 信号：数据更新（单键）
     data_updated = pyqtSignal(int, KLEKey)  # (key_index, updated_key)
+    # 信号：批量颜色更新（多选时点“批量设置颜色”）
+    batch_color_updated = pyqtSignal(list, str, str)  # (indices, key_color, text_color)
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_key: KLEKey = None
+        self.current_key: Optional[KLEKey] = None
         self.current_key_index: int = -1
-        self.current_batch_config: Optional[BatchEditConfig] = None  # 当前按键对应的批量编辑配置
+        self.current_batch_config: Optional[BatchEditConfig] = None
+        self._multi_indices: List[int] = []
+        self._multi_keys: List[KLEKey] = []
+        self.pending_key_color: Optional[str] = None
+        self.pending_text_color: Optional[str] = None
+        self._available_schemes: List[Tuple[str, str]] = []  # [(key_color, text_color), ...]
         self.setup_ui()
         self.setMinimumWidth(300)
         self.setMaximumWidth(400)
@@ -34,9 +65,9 @@ class KeyPropertyPanel(QWidget):
         
         # 标题和切换按钮
         header_layout = QHBoxLayout()
-        title_label = QLabel("按键属性")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        header_layout.addWidget(title_label)
+        self._title_label = QLabel("按键属性")
+        self._title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header_layout.addWidget(self._title_label)
         header_layout.addStretch()
         
         # 切换按钮
@@ -86,10 +117,25 @@ class KeyPropertyPanel(QWidget):
         self.style_group.setLayout(self.style_layout)
         property_content_layout.addWidget(self.style_group)
         
-        # 颜色信息
+        # 颜色信息（方案下拉 + 按键/文字颜色按钮，常驻不随 update_key 清除）
         self.color_group = QGroupBox("颜色")
         self.color_layout = QFormLayout()
         self.color_group.setLayout(self.color_layout)
+        self.scheme_combo_single = QComboBox()
+        self.scheme_combo_single.setMinimumWidth(220)
+        self.scheme_combo_single.setIconSize(QSize(40, 18))
+        self.scheme_combo_single.currentIndexChanged.connect(self._on_scheme_selected_single)
+        self.color_layout.addRow("应用已有方案:", self.scheme_combo_single)
+        self.single_key_color_btn = QPushButton()
+        self.single_key_color_btn.setCursor(Qt.PointingHandCursor)
+        self.single_key_color_btn.setStyleSheet("background-color: #cccccc; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self.single_key_color_btn.clicked.connect(lambda: self._pick_single_key_color(self.single_key_color_btn))
+        self.color_layout.addRow("按键颜色:", self.single_key_color_btn)
+        self.single_text_color_btn = QPushButton()
+        self.single_text_color_btn.setCursor(Qt.PointingHandCursor)
+        self.single_text_color_btn.setStyleSheet("background-color: #000000; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self.single_text_color_btn.clicked.connect(lambda: self._pick_single_text_color(self.single_text_color_btn))
+        self.color_layout.addRow("文字颜色:", self.single_text_color_btn)
         property_content_layout.addWidget(self.color_group)
         
         property_content_layout.addStretch()
@@ -141,6 +187,42 @@ class KeyPropertyPanel(QWidget):
         
         self.stacked_widget.addWidget(edit_widget)
         
+        # ===== 视图3：多选仅颜色 =====
+        self.multi_color_widget = QWidget()
+        multi_layout = QVBoxLayout(self.multi_color_widget)
+        self.multi_color_label = QLabel("已选 0 个按键")
+        self.multi_color_label.setStyleSheet("font-weight: bold; padding: 8px 0;")
+        multi_layout.addWidget(self.multi_color_label)
+        self._multi_scheme_label = QLabel("应用已有方案:")
+        multi_layout.addWidget(self._multi_scheme_label)
+        self.scheme_combo_multi = QComboBox()
+        self.scheme_combo_multi.setMinimumWidth(220)
+        self.scheme_combo_multi.setIconSize(QSize(40, 18))
+        self.scheme_combo_multi.currentIndexChanged.connect(self._on_scheme_selected_multi)
+        multi_layout.addWidget(self.scheme_combo_multi)
+        self._multi_custom_label = QLabel("或自定义:")
+        multi_layout.addWidget(self._multi_custom_label)
+        self.multi_key_color_btn = QPushButton()
+        self.multi_key_color_btn.setCursor(Qt.PointingHandCursor)
+        self.multi_key_color_btn.setStyleSheet("background-color: #cccccc; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.multi_key_color_btn.clicked.connect(self._pick_batch_key_color)
+        self._multi_key_color_label = QLabel("按键颜色:")
+        multi_layout.addWidget(self._multi_key_color_label)
+        multi_layout.addWidget(self.multi_key_color_btn)
+        self.multi_text_color_btn = QPushButton()
+        self.multi_text_color_btn.setCursor(Qt.PointingHandCursor)
+        self.multi_text_color_btn.setStyleSheet("background-color: #000000; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.multi_text_color_btn.clicked.connect(self._pick_batch_text_color)
+        self._multi_text_color_label = QLabel("文字颜色:")
+        multi_layout.addWidget(self._multi_text_color_label)
+        multi_layout.addWidget(self.multi_text_color_btn)
+        self.batch_apply_color_btn = QPushButton("批量设置颜色")
+        self.batch_apply_color_btn.setStyleSheet("font-weight: bold; padding: 8px;")
+        self.batch_apply_color_btn.clicked.connect(self._apply_batch_color)
+        multi_layout.addWidget(self.batch_apply_color_btn)
+        multi_layout.addStretch()
+        self.stacked_widget.addWidget(self.multi_color_widget)
+        
         layout.addWidget(self.stacked_widget)
         
         # 保存按钮（只在字符编辑视图显示）
@@ -154,49 +236,152 @@ class KeyPropertyPanel(QWidget):
         # 初始状态：显示提示
         self.show_empty_state()
     
+    def retranslate_ui(self):
+        """根据当前语言更新本面板文案"""
+        self._title_label.setText(t("按键属性", "Key Properties"))
+        idx = self.stacked_widget.currentIndex()
+        self.switch_btn.setText(t("切换到字符编辑", "Switch to Legend Edit") if idx == 0 else t("切换到按键属性", "Switch to Key Properties"))
+        self.info_group.setTitle(t("基本信息", "Basic Info"))
+        self.chars_display_group.setTitle(t("按键字符", "Key Legend"))
+        self.size_group.setTitle(t("尺寸", "Size"))
+        self.style_group.setTitle(t("样式映射配置", "Style Mapping"))
+        self.color_group.setTitle(t("颜色", "Color"))
+        if self.color_layout.labelForField(self.scheme_combo_single):
+            self.color_layout.labelForField(self.scheme_combo_single).setText(t("应用已有方案:", "Apply scheme:"))
+        if self.color_layout.labelForField(self.single_key_color_btn):
+            self.color_layout.labelForField(self.single_key_color_btn).setText(t("按键颜色:", "Key color:"))
+        if self.color_layout.labelForField(self.single_text_color_btn):
+            self.color_layout.labelForField(self.single_text_color_btn).setText(t("文字颜色:", "Text color:"))
+        self._multi_scheme_label.setText(t("应用已有方案:", "Apply scheme:"))
+        self._multi_custom_label.setText(t("或自定义:", "Or custom:"))
+        self._multi_key_color_label.setText(t("按键颜色:", "Key color:"))
+        self._multi_text_color_label.setText(t("文字颜色:", "Text color:"))
+        self.batch_apply_color_btn.setText(t("批量设置颜色", "Apply to selected"))
+        self.save_btn.setText(t("保存更改", "Save"))
+        m = re.search(r'\d+', self.multi_color_label.text())
+        n = m.group(0) if m else "0"
+        self.multi_color_label.setText(t(f"已选 {n} 个按键（仅可批量设置颜色）", f"Selected {n} keys (batch color only)"))
+    
     def switch_view(self):
         """切换视图"""
         current_index = self.stacked_widget.currentIndex()
         if current_index == 0:  # 当前是属性视图，切换到字符编辑
             self.stacked_widget.setCurrentIndex(1)
-            self.switch_btn.setText("切换到按键属性")
+            self.switch_btn.setText(t("切换到按键属性", "Switch to Key Properties"))
             self.save_btn.setVisible(True)
         else:  # 当前是字符编辑，切换到属性视图
             self.stacked_widget.setCurrentIndex(0)
-            self.switch_btn.setText("切换到字符编辑")
+            self.switch_btn.setText(t("切换到字符编辑", "Switch to Legend Edit"))
             self.save_btn.setVisible(False)
     
     def show_empty_state(self):
         """显示空状态"""
+        self.stacked_widget.setCurrentIndex(0)
         self.info_group.setVisible(False)
         self.chars_display_group.setVisible(False)
         self.size_group.setVisible(False)
         self.style_group.setVisible(False)
         self.color_group.setVisible(False)
     
-    def update_key(self, key: KLEKey, key_index: int = -1, batch_config: Optional[BatchEditConfig] = None):
-        """更新显示的按键
-        
-        参数:
-            key: KLE按键对象
-            key_index: 按键索引
-            batch_config: 对应的批量编辑配置（可选）
-        """
+    def set_available_schemes(self, schemes: List[Tuple[str, str]]):
+        """设置当前布局中已有颜色方案列表，供单键/多选颜色区使用。schemes: [(key_color, text_color), ...]"""
+        self._available_schemes = list(schemes) if schemes else []
+    
+    def _on_scheme_selected_single(self, index: int):
+        """单键时从“应用已有方案”下拉选择方案，直接应用"""
+        if self.current_key is None or self.current_key_index < 0:
+            return
+        data = self.scheme_combo_single.currentData()
+        if data is None:
+            return
+        kc, tc = data
+        self.pending_key_color = kc
+        self.pending_text_color = tc
+        self.single_key_color_btn.setStyleSheet(f"background-color: {kc}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self.single_text_color_btn.setStyleSheet(f"background-color: {tc}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self._apply_single_key_color()
+    
+    def update_keys(self, keys: List[KLEKey], indices: List[int]):
+        """多选时仅显示颜色批量设置；应用后更新一次，不锁定"""
+        if not keys or not indices:
+            self.update_key(None, -1, None)
+            return
+        self.current_key = None
+        self.current_key_index = -1
+        self.current_batch_config = None
+        self._multi_indices = list(indices)
+        self._multi_keys = list(keys)
+        first = keys[0]
+        kc = getattr(first, 'key_color', None) or "#cccccc"
+        tc = getattr(first, 'text_color', None) or "#000000"
+        self.multi_color_label.setText(f"已选 {len(indices)} 个按键（仅可批量设置颜色）")
+        self._batch_key_color = kc
+        self._batch_text_color = tc
+        self.multi_key_color_btn.setStyleSheet(f"background-color: {kc}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.multi_text_color_btn.setStyleSheet(f"background-color: {tc}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.scheme_combo_multi.blockSignals(True)
+        self.scheme_combo_multi.clear()
+        self.scheme_combo_multi.addItem(_scheme_preview_icon("#cccccc", "#000000"), t("自定义", "Custom"), None)
+        for sk, st in self._available_schemes:
+            idx = self.scheme_combo_multi.count()
+            self.scheme_combo_multi.addItem(_scheme_preview_icon(sk, st), " ", (sk, st))
+            self.scheme_combo_multi.setItemData(idx, f"按键 {sk} / 文字 {st}", Qt.ToolTipRole)
+        self.scheme_combo_multi.setCurrentIndex(0)
+        self.scheme_combo_multi.blockSignals(False)
+        self.stacked_widget.setCurrentIndex(2)
+        self.switch_btn.setVisible(False)
+        self.save_btn.setVisible(False)
+    
+    def _pick_batch_key_color(self):
+        q = QColor(getattr(self, '_batch_key_color', None) or "#cccccc")
+        color = QColorDialog.getColor(q, self, "按键颜色")
+        if color.isValid():
+            self.multi_key_color_btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+            self._batch_key_color = color.name()
+    
+    def _pick_batch_text_color(self):
+        q = QColor(getattr(self, '_batch_text_color', None) or "#000000")
+        color = QColorDialog.getColor(q, self, "文字颜色")
+        if color.isValid():
+            self.multi_text_color_btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+            self._batch_text_color = color.name()
+    
+    def _on_scheme_selected_multi(self, index: int):
+        """多选时从“应用已有方案”下拉选择方案，直接应用到当前选中按键"""
+        if not self._multi_indices:
+            return
+        data = self.scheme_combo_multi.currentData()
+        if data is None:
+            return
+        kc, tc = data
+        self._batch_key_color = kc
+        self._batch_text_color = tc
+        self.multi_key_color_btn.setStyleSheet(f"background-color: {kc}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.multi_text_color_btn.setStyleSheet(f"background-color: {tc}; border: 1px solid #666; min-width: 60px; min-height: 28px;")
+        self.batch_color_updated.emit(list(self._multi_indices), kc, tc)
+    
+    def _apply_batch_color(self):
+        kc = getattr(self, '_batch_key_color', None) or (getattr(self._multi_keys[0], 'key_color', None) if self._multi_keys else "#cccccc")
+        tc = getattr(self, '_batch_text_color', None) or (getattr(self._multi_keys[0], 'text_color', None) if self._multi_keys else "#000000")
+        self.batch_color_updated.emit(list(self._multi_indices), kc, tc)
+    
+    def update_key(self, key: Optional[KLEKey], key_index: int = -1, batch_config: Optional[BatchEditConfig] = None):
+        """更新显示的按键（单键）；多选请用 update_keys"""
         self.current_key = key
         self.current_key_index = key_index
         self.current_batch_config = batch_config
-        
-        print(f"【属性面板更新】按键索引: {key_index}")
-        print(f"  - batch_config: {batch_config is not None}")
-        if batch_config:
-            print(f"  - 配置类型: {batch_config.key_type.to_string()}")
-        else:
-            print(f"  - 使用默认配置")
+        self._multi_indices = []
+        self._multi_keys = []
+        self.stacked_widget.setCurrentIndex(0)
+        self.switch_btn.setVisible(True)
         
         if key is None:
             self.show_empty_state()
             self.save_btn.setEnabled(False)
             return
+        
+        self.pending_key_color = getattr(key, 'key_color', None) or key.key_color
+        self.pending_text_color = getattr(key, 'text_color', None) or key.text_color
         
         # 显示所有组
         self.info_group.setVisible(True)
@@ -205,12 +390,11 @@ class KeyPropertyPanel(QWidget):
         self.color_group.setVisible(True)
         self.save_btn.setEnabled(True)
         
-        # 清除旧内容（注意：必须在显示新内容之前清除）
+        # 清除旧内容（颜色区为常驻控件，不清除）
         self._clear_layout(self.info_layout)
         self._clear_layout(self.chars_display_layout)
         self._clear_layout(self.size_layout)
         self._clear_layout(self.style_layout)
-        self._clear_layout(self.color_layout)
         
         # 按键上已有字符（非空位置 → 位置名: 字符）
         parts = []
@@ -253,7 +437,6 @@ class KeyPropertyPanel(QWidget):
         # 样式映射信息（显示批量编辑配置）- 整理显示
         if self.current_batch_config:
             config = self.current_batch_config
-            print(f"  - 显示配置信息: {config.key_type.to_string()}")
             
             # 类型标识
             self._add_form_item(self.style_layout, "类型标识", config.key_type.to_string())
@@ -321,31 +504,55 @@ class KeyPropertyPanel(QWidget):
                     style_label.setStyleSheet("color: #666; font-size: 10px; padding-left: 10px;")
                     self.style_layout.addRow("", style_label)
         else:
-            print(f"  - 未找到配置，显示默认配置提示")
             default_label = QLabel("使用默认配置\n（请在批量编辑界面配置）")
             default_label.setStyleSheet("color: #999; font-style: italic; padding: 10px;")
             self.style_layout.addRow("", default_label)
         
-        # 颜色信息
-        if key.key_color:
-            color_label = QLabel()
-            color_label.setStyleSheet(f"background-color: {key.key_color}; border: 1px solid #ccc; min-width: 50px; min-height: 20px;")
-            self._add_form_item(self.color_layout, "按键颜色", "")
-            self.color_layout.addRow("", color_label)
-        
-        if key.text_color:
-            text_color_label = QLabel()
-            text_color_label.setStyleSheet(f"background-color: {key.text_color}; border: 1px solid #ccc; min-width: 50px; min-height: 20px;")
-            self._add_form_item(self.color_layout, "文字颜色", "")
-            self.color_layout.addRow("", text_color_label)
-        
-        if not key.key_color and not key.text_color:
-            no_color = QLabel("默认颜色")
-            no_color.setStyleSheet("color: gray;")
-            self.color_layout.addRow("", no_color)
+        # 颜色区：刷新方案下拉与按钮样式（控件已在 setup_ui 中常驻）
+        kc = key.key_color or "#cccccc"
+        tc = key.text_color or "#000000"
+        self.pending_key_color = kc
+        self.pending_text_color = tc
+        self.single_key_color_btn.setStyleSheet(f"background-color: {kc}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self.single_text_color_btn.setStyleSheet(f"background-color: {tc}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+        self.scheme_combo_single.blockSignals(True)
+        self.scheme_combo_single.clear()
+        self.scheme_combo_single.addItem(_scheme_preview_icon("#cccccc", "#000000"), t("自定义", "Custom"), None)
+        for i, (k, t) in enumerate(self._available_schemes):
+            idx = self.scheme_combo_single.count()
+            self.scheme_combo_single.addItem(_scheme_preview_icon(k, t), " ", (k, t))
+            self.scheme_combo_single.setItemData(idx, f"按键 {k} / 文字 {t}", Qt.ToolTipRole)
+        self.scheme_combo_single.setCurrentIndex(0)
+        self.scheme_combo_single.blockSignals(False)
+    
+    def _pick_single_key_color(self, btn: QPushButton):
+        q = QColor(self.pending_key_color or "#cccccc")
+        color = QColorDialog.getColor(q, self, "按键颜色")
+        if color.isValid():
+            self.pending_key_color = color.name()
+            btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+            self._apply_single_key_color()
+    
+    def _pick_single_text_color(self, btn: QPushButton):
+        q = QColor(self.pending_text_color or "#000000")
+        color = QColorDialog.getColor(q, self, "文字颜色")
+        if color.isValid():
+            self.pending_text_color = color.name()
+            btn.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+            self._apply_single_key_color()
+    
+    def _apply_single_key_color(self):
+        """将当前 pending 颜色写回当前按键并发出 data_updated（选完即生效，更新一次不锁定）"""
+        if self.current_key is None or self.current_key_index < 0:
+            return
+        if self.pending_key_color is not None:
+            self.current_key.key_color = self.pending_key_color
+        if self.pending_text_color is not None:
+            self.current_key.text_color = self.pending_text_color
+        self.data_updated.emit(self.current_key_index, self.current_key)
     
     def save_changes(self):
-        """保存更改"""
+        """保存更改（含字符与颜色，应用后更新一次不锁定）"""
         if self.current_key is None or self.current_key_index < 0:
             return
         
@@ -355,11 +562,14 @@ class KeyPropertyPanel(QWidget):
             char_item = self.chars_table.item(i, 1)
             char_text = char_item.text() if char_item else ""
             new_labels.append(char_text)
-        
-        # 更新 key 对象
         self.current_key.labels = new_labels
         
-        # 发出信号
+        # 写回颜色（若有 pending）
+        if self.pending_key_color is not None:
+            self.current_key.key_color = self.pending_key_color
+        if self.pending_text_color is not None:
+            self.current_key.text_color = self.pending_text_color
+        
         self.data_updated.emit(self.current_key_index, self.current_key)
     
     def _clear_layout(self, layout):

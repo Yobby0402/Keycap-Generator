@@ -5,9 +5,10 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                              QMenuBar, QMenu, QAction, QFileDialog, QMessageBox,
                              QStatusBar, QProgressBar, QDialog, QActionGroup,
                              QTabWidget, QStackedWidget, QDoubleSpinBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl
+from PyQt5.QtGui import QIcon, QDesktopServices
 from ui.parameter_panel import ParameterPanel
+from core.i18n import t, set_language as i18n_set_language, get_language as i18n_get_language
 from ui.batch_panel import BatchPanel
 from ui.preview_widget import PreviewWidget
 from ui.preview_2d_widget import Preview2DWidget
@@ -48,7 +49,7 @@ class BatchGenerationThread(QThread):
     
     progress = pyqtSignal(int, int)  # (current, total)
     key_generated = pyqtSignal(object, object, float, float, float)  # (keycap_model, text_model, x, y, z)
-    finished = pyqtSignal(list, list)  # (keycap_models, text_models)
+    finished = pyqtSignal(list, list, list, list)  # (keycap_models, text_models, key_colors, text_colors)
     error = pyqtSignal(str)
     
     def __init__(self, kle_keys, batch_configs, default_geometry, default_font, row_spacing=2.0, col_spacing=2.0, row_heights=None):
@@ -71,6 +72,8 @@ class BatchGenerationThread(QThread):
             
             keycap_models = []
             text_models = []
+            key_colors = []
+            text_colors = []
             
             # 按照KLE坐标排序（先按y坐标，再按x坐标）
             sorted_keys = sorted(self.kle_keys, key=lambda k: (k.y, k.x))
@@ -151,8 +154,9 @@ class BatchGenerationThread(QThread):
                         key_center_y = current_y - key_height / 2
                         
                         keycap_models.append((keycap_model, (key_center_x, key_center_y, 0)))
-                        if text_model:
-                            text_models.append((text_model, (key_center_x, key_center_y, 0)))
+                        key_colors.append(getattr(kle_key, 'key_color', None) or '#cccccc')
+                        text_models.append((text_model, (key_center_x, key_center_y, 0)))  # text_model 可为 None
+                        text_colors.append(getattr(kle_key, 'text_color', None) or '#000000')
                         
                         # 更新下一个按键的x位置
                         current_x += key_width + self.col_spacing
@@ -163,7 +167,7 @@ class BatchGenerationThread(QThread):
                     current_y -= max_row_height + self.row_spacing
                     max_row_height = 0.0
             
-            self.finished.emit(keycap_models, text_models)
+            self.finished.emit(keycap_models, text_models, key_colors, text_colors)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -248,6 +252,7 @@ class BatchExportThread(QThread):
             current_y = first_row_max_height / 2
             max_row_height = 0.0
             all_keycaps, all_texts = [], []
+            colored_items = []  # (keycap, text, key_color, text_color) 供 3MF 按颜色区分
 
             for row_idx, row_y in enumerate(sorted_rows):
                 row_keys = sorted(rows[row_y], key=lambda k: k.x)
@@ -273,6 +278,9 @@ class BatchExportThread(QThread):
                         all_keycaps.append(keycap_pos)
                         if text_pos:
                             all_texts.append(text_pos)
+                        kc = getattr(kle_key, 'key_color', None) or "#cccccc"
+                        tc = getattr(kle_key, 'text_color', None) or "#000000"
+                        colored_items.append((keycap_pos, text_pos, kc, tc))
                         current_x += kw + col_spacing
                         max_row_height = max(max_row_height, kh)
                 if row_idx < len(sorted_rows) - 1:
@@ -283,43 +291,44 @@ class BatchExportThread(QThread):
                 self.finished.emit(False, "没有成功生成任何按键", "批量导出完成")
                 return
 
-            self.progress_message.emit("正在合并键帽模型，请稍候...")
-            merged_keycap = all_keycaps[0]
-            for k in all_keycaps[1:]:
-                merged_keycap = merged_keycap.union(k)
-            merged_text = None
-            if all_texts:
-                self.progress_message.emit("正在合并字符模型，请稍候...")
-                merged_text = all_texts[0]
-                for t in all_texts[1:]:
-                    if t:
-                        merged_text = merged_text.union(t)
-
             path = self.path
             file_ext = os.path.splitext(path)[1].lower()
             self.progress_message.emit("正在写入文件，请稍候...")
-            if file_ext == '.stl':
-                base_path = os.path.splitext(path)[0]
-                k_ok, _, _ = export_keycap_and_text(merged_keycap, merged_text, base_path)
-                if k_ok:
-                    self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.stl\n{base_path}_text.stl", "批量导出完成")
-                else:
-                    self.finished.emit(False, "STL 导出失败", "批量导出完成")
-            elif file_ext in ['.step', '.stp']:
-                base_path = os.path.splitext(path)[0]
-                k_ok, _, _ = export_step_keycap_text(merged_keycap, merged_text, base_path)
-                if k_ok:
-                    self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.step\n{base_path}_text.step", "批量导出完成")
-                else:
-                    self.finished.emit(False, "STEP 导出失败", "批量导出完成")
-            elif file_ext == '.3mf':
-                ok = export_3mf(merged_keycap, merged_text, path)
+            if file_ext == '.3mf':
+                from export.threemf_exporter import export_3mf_batch
+                ok = export_3mf_batch(colored_items, path)
                 if ok:
-                    self.finished.emit(True, f"已导出合并文件到:\n{path}", "批量导出完成")
+                    self.finished.emit(True, f"已导出合并文件到:\n{path}\n（按按键/文字颜色区分）", "批量导出完成")
                 else:
                     self.finished.emit(False, "3MF 导出失败", "批量导出完成")
             else:
-                self.finished.emit(False, f"不支持的文件格式: {file_ext}", "批量导出完成")
+                self.progress_message.emit("正在合并键帽模型，请稍候...")
+                merged_keycap = all_keycaps[0]
+                for k in all_keycaps[1:]:
+                    merged_keycap = merged_keycap.union(k)
+                merged_text = None
+                if all_texts:
+                    self.progress_message.emit("正在合并字符模型，请稍候...")
+                    merged_text = all_texts[0]
+                    for t in all_texts[1:]:
+                        if t:
+                            merged_text = merged_text.union(t)
+                if file_ext == '.stl':
+                    base_path = os.path.splitext(path)[0]
+                    k_ok, _, _ = export_keycap_and_text(merged_keycap, merged_text, base_path)
+                    if k_ok:
+                        self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.stl\n{base_path}_text.stl", "批量导出完成")
+                    else:
+                        self.finished.emit(False, "STL 导出失败", "批量导出完成")
+                elif file_ext in ['.step', '.stp']:
+                    base_path = os.path.splitext(path)[0]
+                    k_ok, _, _ = export_step_keycap_text(merged_keycap, merged_text, base_path)
+                    if k_ok:
+                        self.finished.emit(True, f"已导出合并文件到:\n{base_path}_keycap.step\n{base_path}_text.step", "批量导出完成")
+                    else:
+                        self.finished.emit(False, "STEP 导出失败", "批量导出完成")
+                else:
+                    self.finished.emit(False, f"不支持的文件格式: {file_ext}", "批量导出完成")
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -378,6 +387,14 @@ class MainWindow(QMainWindow):
         self.settings = Settings()
         self.setup_ui()
         self.setup_menu()
+        # 从设置加载语言并应用（setup_menu 内已调用 retranslateUi，此处确保 i18n 与设置一致）
+        lang = self.settings.get_language()
+        i18n_set_language(lang)
+        self.retranslateUi()
+        if hasattr(self, 'batch_panel'):
+            self.batch_panel.retranslate_ui()
+        if hasattr(self, 'key_property_panel'):
+            self.key_property_panel.retranslate_ui()
         self.setup_statusbar()
         self.load_settings()
         
@@ -461,6 +478,7 @@ class MainWindow(QMainWindow):
         batch_main.setContentsMargins(8, 8, 8, 8)
         
         self.batch_panel = BatchPanel()
+        self._batch_models_generated = False  # 是否已生成全部按键预览（用于「取消生成」）
         self.batch_panel.kle_data_changed.connect(self.on_kle_data_changed)
         self.batch_panel.generate_batch_signal.connect(self.on_generate_batch)
         self.batch_panel.generate_all_signal.connect(self.on_generate_all_keys)
@@ -470,7 +488,7 @@ class MainWindow(QMainWindow):
         left_col = QVBoxLayout()
         left_col.setSpacing(6)
         self.kle_preview_widget = KLEPreviewWidget()
-        self.kle_preview_widget.key_selected.connect(self.on_kle_key_selected)
+        self.kle_preview_widget.key_selection_changed.connect(self.on_kle_selection_changed)
         left_col.addWidget(self.kle_preview_widget, stretch=4)
         left_col.addWidget(self.batch_panel.get_spacing_widget(), stretch=1)
         left_col.addWidget(self.batch_panel.get_actions_widget(), stretch=1)
@@ -485,6 +503,7 @@ class MainWindow(QMainWindow):
         from ui.key_property_panel import KeyPropertyPanel
         self.key_property_panel = KeyPropertyPanel()
         self.key_property_panel.data_updated.connect(self.on_kle_key_updated_and_preview)
+        self.key_property_panel.batch_color_updated.connect(self.on_batch_color_updated)
         right_col = QVBoxLayout()
         right_col.setSpacing(6)
         right_col.addWidget(self.key_property_panel, stretch=1)
@@ -497,7 +516,7 @@ class MainWindow(QMainWindow):
         
         # ===== Tab 2: 键盘参数 =====
         from ui.batch_edit_tab import BatchEditTab
-        self.batch_edit_tab = BatchEditTab()
+        self.batch_edit_tab = BatchEditTab(settings=self.settings)
         self.batch_edit_tab.config_applied.connect(self.on_batch_config_applied)
         self.mode_tabs.addTab(self.batch_edit_tab, "键盘参数")
         
@@ -516,8 +535,15 @@ class MainWindow(QMainWindow):
         dialog.exec_()
     
     def on_kle_data_changed(self, keys):
-        """KLE 数据更新"""
+        """KLE 数据更新（导入时不触发生成，仅更新布局与配置）"""
         self.kle_preview_widget.set_data(keys)
+        # 导入时清空 3D 预览，不自动生成
+        if hasattr(self, 'batch_preview_widget'):
+            self.batch_preview_widget.clear_all_models()
+            self.batch_preview_widget.update_model(None, None)
+        self._batch_models_generated = False
+        if hasattr(self, 'batch_panel') and hasattr(self.batch_panel, 'gen_all_btn'):
+            self.batch_panel.gen_all_btn.setText("生成所有按键预览")
         # 2D 预览使用固定 0 间距，不随模型间距变化
         
         # 更新批量编辑界面
@@ -557,12 +583,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'kle_preview_widget'):
             self.kle_preview_widget.update()
         
-        # 如果当前有选中的按键，更新其3D预览
-        if hasattr(self.kle_preview_widget, 'selected_index'):
-            selected_index = self.kle_preview_widget.selected_index
-            if selected_index >= 0:
-                self._preview_single_key(selected_index)
-        
+        # 不在此处自动生成 3D 预览，仅在有按键时由用户点击「生成」按钮触发
         self.status_bar.showMessage(f"批量编辑配置已应用到 {len(configs)} 个类型，共 {total_keys} 个按键")
         
     def on_generate_batch(self):
@@ -581,16 +602,21 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"按键 #{selected_index + 1} 生成完成")
     
     def on_generate_all_keys(self):
-        """生成所有按键的3D预览（使用后台线程）"""
+        """生成所有按键的3D预览，或若已生成则取消生成（清空预览）"""
+        if getattr(self, '_batch_models_generated', False):
+            self.batch_preview_widget.clear_all_models()
+            self.batch_preview_widget.update_model(None, None)
+            self._batch_models_generated = False
+            self.batch_panel.gen_all_btn.setText("生成所有按键预览")
+            self.status_bar.showMessage("已取消生成")
+            return
         if not hasattr(self.kle_preview_widget, 'keys') or not self.kle_preview_widget.keys:
             QMessageBox.warning(self, "警告", "请先导入 KLE 布局数据")
             return
-        
         kle_keys = self.kle_preview_widget.keys
         if not kle_keys:
             QMessageBox.warning(self, "警告", "没有可生成的按键")
             return
-        
         # 显示进度
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, len(kle_keys))
@@ -641,11 +667,13 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(current)
         self.status_bar.showMessage(f"正在生成按键 {current}/{total}...")
     
-    def on_batch_finished(self, keycap_models, text_models):
+    def on_batch_finished(self, keycap_models, text_models, key_colors=None, text_colors=None):
         """批量生成完成"""
         self.progress_bar.setVisible(False)
         if keycap_models:
-            self.batch_preview_widget.update_all_models(keycap_models, text_models)
+            self.batch_preview_widget.update_all_models(keycap_models, text_models, key_colors, text_colors)
+            self._batch_models_generated = True
+            self.batch_panel.gen_all_btn.setText("取消生成")
             self.status_bar.showMessage(f"已生成 {len(keycap_models)} 个按键的3D预览")
         else:
             QMessageBox.warning(self, "生成失败", "无法生成任何按键模型")
@@ -655,41 +683,62 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         QMessageBox.critical(self, "生成错误", f"生成过程中出错:\n{error_msg}")
         
-    def on_kle_key_selected(self, index):
-        """KLE 按键选中 - 单击时更新属性面板（集成编辑功能）"""
-        if index < 0 or not hasattr(self.kle_preview_widget, 'keys') or index >= len(self.kle_preview_widget.keys):
+    def _get_color_schemes_from_keys(self, keys):
+        """从按键列表收集不重复的 (key_color, text_color) 方案，供“应用已有方案”使用"""
+        seen = set()
+        out = []
+        for k in (keys or []):
+            kc = getattr(k, 'key_color', None) or '#cccccc'
+            tc = getattr(k, 'text_color', None) or '#000000'
+            pair = (kc, tc)
+            if pair not in seen:
+                seen.add(pair)
+                out.append(pair)
+        return out
+    
+    def on_kle_selection_changed(self, indices: list):
+        """KLE 选中变化（单选或框选/Ctrl 多选）— 更新按键属性，多选时仅显示颜色批量设置"""
+        if not hasattr(self.kle_preview_widget, 'keys') or not self.kle_preview_widget.keys:
+            self.key_property_panel.update_key(None, -1, None)
             return
-        
-        key = self.kle_preview_widget.keys[index]
-        
-        # 查找对应的批量编辑配置
-        batch_config = None
-        if hasattr(self, 'batch_edit_tab') and hasattr(self.batch_edit_tab, 'configs'):
-            from core.key_type_analyzer import KeyTypeAnalyzer
-            key_type = KeyTypeAnalyzer.get_signature_for_key(key)
-            type_id = key_type.to_string()
-            print(f"【按键选中】索引: {index}, 类型ID: {type_id}")
-            print(f"  - 可用配置类型: {list(self.batch_edit_tab.configs.keys())}")
-            if type_id in self.batch_edit_tab.configs:
-                batch_config = self.batch_edit_tab.configs[type_id]
-                print(f"  - 找到批量编辑配置: {type_id}")
-            else:
-                print(f"  - 未找到批量编辑配置，使用默认配置")
+        keys = self.kle_preview_widget.keys
+        schemes = self._get_color_schemes_from_keys(keys)
+        self.key_property_panel.set_available_schemes(schemes)
+        if not indices:
+            self.key_property_panel.update_key(None, -1, None)
+            return
+        if len(indices) == 1:
+            idx = indices[0]
+            if idx < 0 or idx >= len(keys):
+                self.key_property_panel.update_key(None, -1, None)
+                return
+            key = keys[idx]
+            batch_config = None
+            if hasattr(self, 'batch_edit_tab') and hasattr(self.batch_edit_tab, 'configs'):
+                from core.key_type_analyzer import KeyTypeAnalyzer
+                type_id = KeyTypeAnalyzer.get_signature_for_key(key).to_string()
+                batch_config = self.batch_edit_tab.configs.get(type_id)
+            self.key_property_panel.update_key(key, idx, batch_config)
         else:
-            print(f"  - batch_edit_tab 或 configs 不存在")
-        
-        # 更新属性面板（包含编辑功能和批量编辑配置）
-        self.key_property_panel.update_key(key, index, batch_config)
+            self.key_property_panel.update_keys([keys[i] for i in indices if 0 <= i < len(keys)], indices)
     
     def on_kle_key_updated_and_preview(self, key_index: int, updated_key):
-        """KLE 按键数据更新并预览3D模型"""
-        # 更新预览
+        """KLE 按键数据更新（仅更新 2D 与数据；3D 需用户点击「生成当前选中」才生成）"""
         if key_index < len(self.kle_preview_widget.keys):
             self.kle_preview_widget.keys[key_index] = updated_key
             self.kle_preview_widget.update()
-        
-        # 自动生成并预览3D模型
-        self._preview_single_key(key_index)
+    
+    def on_batch_color_updated(self, indices: list, key_color: str, text_color: str):
+        """批量设置颜色（多选时点“批量设置颜色”），写回按键并刷新预览"""
+        if not hasattr(self.kle_preview_widget, 'keys') or not indices:
+            return
+        keys = self.kle_preview_widget.keys
+        for i in indices:
+            if 0 <= i < len(keys):
+                keys[i].key_color = key_color
+                keys[i].text_color = text_color
+        self.kle_preview_widget.update()
+        self.status_bar.showMessage(f"已为 {len(indices)} 个按键应用颜色")
     
     def _preview_single_key(self, key_index: int):
         """预览单个按键的3D模型"""
@@ -772,8 +821,9 @@ class MainWindow(QMainWindow):
         keycap_model, text_model = generator.generate_single_key(kle_key)
         
         if keycap_model:
-            # 更新批量模式的 3D 预览
-            self.batch_preview_widget.update_model(keycap_model, text_model)
+            kc = getattr(kle_key, 'key_color', None) or '#cccccc'
+            tc = getattr(kle_key, 'text_color', None) or '#000000'
+            self.batch_preview_widget.update_model(keycap_model, text_model, key_color=kc, text_color=tc)
             self.status_bar.showMessage(f"按键 #{key_index + 1} 预览已更新")
         else:
             self.status_bar.showMessage(f"按键 #{key_index + 1} 生成失败")
@@ -1247,81 +1297,57 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
     
     def setup_menu(self):
-        """设置菜单栏"""
+        """设置菜单栏（文案由 retranslateUi 根据语言设置）"""
         menubar = self.menuBar()
         
         # 文件菜单
-        file_menu = menubar.addMenu("文件(&F)")
+        self._file_menu = menubar.addMenu("")
+        self._new_action = QAction("", self)
+        self._new_action.setShortcut("Ctrl+N")
+        self._new_action.triggered.connect(self.new_project)
+        self._file_menu.addAction(self._new_action)
+        self._export_stl_action = QAction("", self)
+        self._export_stl_action.setShortcut("Ctrl+S")
+        self._export_stl_action.triggered.connect(self.export_stl)
+        self._file_menu.addAction(self._export_stl_action)
+        self._export_step_action = QAction("", self)
+        self._export_step_action.setShortcut("Ctrl+P")
+        self._export_step_action.triggered.connect(self.export_step)
+        self._file_menu.addAction(self._export_step_action)
+        self._export_3mf_action = QAction("", self)
+        self._export_3mf_action.setShortcut("Ctrl+M")
+        self._export_3mf_action.triggered.connect(self.export_3mf)
+        self._file_menu.addAction(self._export_3mf_action)
+        self._file_menu.addSeparator()
+        self._import_kle_action = QAction("", self)
+        self._import_kle_action.setShortcut("Ctrl+K")
+        self._import_kle_action.triggered.connect(self.import_kle_layout)
+        self._file_menu.addAction(self._import_kle_action)
+        self._export_single_config_action = QAction("", self)
+        self._export_single_config_action.triggered.connect(self.export_single_key_config)
+        self._file_menu.addAction(self._export_single_config_action)
+        self._export_all_config_action = QAction("", self)
+        self._export_all_config_action.triggered.connect(self.export_all_key_configs)
+        self._file_menu.addAction(self._export_all_config_action)
+        self._import_config_action = QAction("", self)
+        self._import_config_action.triggered.connect(self.import_key_config)
+        self._file_menu.addAction(self._import_config_action)
+        self._file_menu.addSeparator()
+        self._exit_action = QAction("", self)
+        self._exit_action.setShortcut("Ctrl+Q")
+        self._exit_action.triggered.connect(self.close)
+        self._file_menu.addAction(self._exit_action)
         
-        # 新建
-        new_action = QAction("新建(&N)", self)
-        new_action.setShortcut("Ctrl+N")
-        new_action.triggered.connect(self.new_project)
-        file_menu.addAction(new_action)
-        
-        # 导出STL
-        export_stl_action = QAction("导出STL(&S)", self)
-        export_stl_action.setShortcut("Ctrl+S")
-        export_stl_action.triggered.connect(self.export_stl)
-        file_menu.addAction(export_stl_action)
-        
-        # 导出STEP
-        export_step_action = QAction("导出STEP(&P)", self)
-        export_step_action.setShortcut("Ctrl+P")
-        export_step_action.triggered.connect(self.export_step)
-        file_menu.addAction(export_step_action)
-        
-        # 导出3MF（推荐用于多色打印）
-        export_3mf_action = QAction("导出3MF(&M) [推荐多色]", self)
-        export_3mf_action.setShortcut("Ctrl+M")
-        export_3mf_action.triggered.connect(self.export_3mf)
-        file_menu.addAction(export_3mf_action)
-        
-        file_menu.addSeparator()
-        
-        # 导入 KLE 布局数据
-        import_kle_action = QAction("导入 KLE 布局数据(&K)...", self)
-        import_kle_action.setShortcut("Ctrl+K")
-        import_kle_action.triggered.connect(self.import_kle_layout)
-        file_menu.addAction(import_kle_action)
-        
-        # 导出单个按键配置
-        export_single_config_action = QAction("导出单个按键配置(&C)...", self)
-        export_single_config_action.triggered.connect(self.export_single_key_config)
-        file_menu.addAction(export_single_config_action)
-        
-        # 导出整套按键配置
-        export_all_config_action = QAction("导出整套按键配置(&A)...", self)
-        export_all_config_action.triggered.connect(self.export_all_key_configs)
-        file_menu.addAction(export_all_config_action)
-        
-        # 导入按键配置
-        import_config_action = QAction("导入按键配置(&I)...", self)
-        import_config_action.triggered.connect(self.import_key_config)
-        file_menu.addAction(import_config_action)
-        
-        file_menu.addSeparator()
-        
-        # 退出
-        exit_action = QAction("退出(&X)", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-        
-        # 视图菜单（吸附设置）
-        view_menu = menubar.addMenu("视图(&V)")
-        
-        self.snap_action_enable = QAction("启用对齐吸附", self, checkable=True)
+        # 视图菜单
+        self._view_menu = menubar.addMenu("")
+        self.snap_action_enable = QAction("", self, checkable=True)
         self.snap_action_enable.setChecked(self.settings.get_snap_enabled())
         self.snap_action_enable.triggered.connect(self.toggle_snap)
-        view_menu.addAction(self.snap_action_enable)
-        
-        # 网格大小子菜单
-        grid_menu = view_menu.addMenu("网格大小")
+        self._view_menu.addAction(self.snap_action_enable)
+        self._grid_menu = self._view_menu.addMenu("")
         grid_sizes = [0.1, 0.5, 1.0, 2.0, 5.0]
         self.grid_actions = []
         current_grid = self.settings.get_snap_grid_size()
-        
         grid_group = QActionGroup(self)
         for size in grid_sizes:
             action = QAction(f"{size} mm", self, checkable=True)
@@ -1330,11 +1356,12 @@ class MainWindow(QMainWindow):
             action.setData(size)
             action.triggered.connect(lambda c, s=size: self.set_grid_size(s))
             grid_group.addAction(action)
-            grid_menu.addAction(action)
+            self._grid_menu.addAction(action)
             self.grid_actions.append(action)
-
-        # 对齐菜单（预设位置）
-        align_menu = menubar.addMenu("对齐(&A)")
+        
+        # 对齐菜单
+        self._align_menu = menubar.addMenu("")
+        self._align_actions = []
         positions = [
             ("左上", "左上"), ("中上", "中上"), ("右上", "右上"),
             ("左中", "左中"), ("中间", "中间"), ("右中", "右中"),
@@ -1342,24 +1369,119 @@ class MainWindow(QMainWindow):
         ]
         for name, preset in positions:
             action = QAction(name, self)
-            action.triggered.connect(lambda c, p=preset: self.preview_2d_widget.apply_preset_position(p))
-            align_menu.addAction(action)
+            action.triggered.connect(lambda c, p=preset: self._apply_align_preset(p))
+            self._align_menu.addAction(action)
+            self._align_actions.append((name, action))
         
         # 设置菜单
-        settings_menu = menubar.addMenu("设置(&S)")
+        self._settings_menu = menubar.addMenu("")
+        self._settings_action = QAction("", self)
+        self._settings_action.setShortcut("Ctrl+,")
+        self._settings_action.triggered.connect(self.show_settings)
+        self._settings_menu.addAction(self._settings_action)
         
-        settings_action = QAction("设置(&S)...", self)
-        settings_action.setShortcut("Ctrl+,")
-        settings_action.triggered.connect(self.show_settings)
-        settings_menu.addAction(settings_action)
+        # 语言菜单
+        self._language_menu = menubar.addMenu("")
+        self._lang_zh_action = QAction("中文", self, checkable=True)
+        self._lang_zh_action.triggered.connect(lambda: self._set_ui_language("zh"))
+        self._language_menu.addAction(self._lang_zh_action)
+        self._lang_en_action = QAction("English", self, checkable=True)
+        self._lang_en_action.triggered.connect(lambda: self._set_ui_language("en"))
+        self._language_menu.addAction(self._lang_en_action)
+        self._lang_group = QActionGroup(self)
+        self._lang_group.addAction(self._lang_zh_action)
+        self._lang_group.addAction(self._lang_en_action)
         
         # 帮助菜单
-        help_menu = menubar.addMenu("帮助(&H)")
+        self._help_menu = menubar.addMenu("")
+        self._open_kle_action = QAction("", self)
+        self._open_kle_action.triggered.connect(self._open_kle_website)
+        self._help_menu.addAction(self._open_kle_action)
+        self._help_menu.addSeparator()
+        self._about_action = QAction("", self)
+        self._about_action.triggered.connect(self.show_about)
+        self._help_menu.addAction(self._about_action)
         
-        about_action = QAction("关于(&A)", self)
-        about_action.triggered.connect(self.show_about)
-        help_menu.addAction(about_action)
+        self.retranslateUi()
+    
+    def _set_ui_language(self, lang: str):
+        self.settings.set_language(lang)
+        i18n_set_language(lang)
+        self._lang_zh_action.setChecked(lang == "zh")
+        self._lang_en_action.setChecked(lang == "en")
+        self.retranslateUi()
+        if hasattr(self, 'batch_panel'):
+            self.batch_panel.retranslate_ui()
+        if hasattr(self, 'key_property_panel'):
+            self.key_property_panel.retranslate_ui()
+        if hasattr(self, 'parameter_panel'):
+            self.parameter_panel.retranslateUi()
+        if hasattr(self, 'batch_edit_tab'):
+            self.batch_edit_tab.retranslateUi()
+    
+    def _open_kle_website(self):
+        QDesktopServices.openUrl(QUrl("https://www.keyboard-layout-editor.com/"))
+    
+    def retranslateUi(self):
+        """根据当前语言更新窗口与菜单文案"""
+        self.setWindowTitle(t("机械键盘按键模型生成器", "Keycap Model Generator"))
+        self._file_menu.setTitle(t("文件(&F)", "&File"))
+        self._new_action.setText(t("新建(&N)", "&New"))
+        self._export_stl_action.setText(t("导出STL(&S)", "Export &STL"))
+        self._export_step_action.setText(t("导出STEP(&P)", "Export Ste&P"))
+        self._export_3mf_action.setText(t("导出3MF(&M) [推荐多色]", "Export 3M&F [Multi-color]"))
+        self._import_kle_action.setText(t("导入 KLE 布局数据(&K)...", "Import KLE Layout (&K)..."))
+        self._export_single_config_action.setText(t("导出单个按键配置(&C)...", "Export Single Key Config (&C)..."))
+        self._export_all_config_action.setText(t("导出整套按键配置(&A)...", "Export All Key Config (&A)..."))
+        self._import_config_action.setText(t("导入按键配置(&I)...", "Import Key Config (&I)..."))
+        self._exit_action.setText(t("退出(&X)", "E&xit"))
+        self._view_menu.setTitle(t("视图(&V)", "&View"))
+        self.snap_action_enable.setText(t("启用对齐吸附", "Enable Snap"))
+        self._grid_menu.setTitle(t("网格大小", "Grid Size"))
+        self._align_menu.setTitle(t("对齐(&A)", "&Align"))
+        align_names_zh = ["左上", "中上", "右上", "左中", "中间", "右中", "左下", "中下", "右下"]
+        align_names_en = ["Top-Left", "Top-Center", "Top-Right", "Mid-Left", "Center", "Mid-Right", "Bottom-Left", "Bottom-Center", "Bottom-Right"]
+        for i, (_, action) in enumerate(self._align_actions):
+            action.setText(t(align_names_zh[i], align_names_en[i]))
+        self._settings_menu.setTitle(t("设置(&S)", "&Settings"))
+        self._settings_action.setText(t("设置(&S)...", "&Settings..."))
+        self._language_menu.setTitle(t("语言(&L)", "&Language"))
+        self._lang_zh_action.setText("中文")
+        self._lang_en_action.setText("English")
+        cur = i18n_get_language()
+        self._lang_zh_action.setChecked(cur == "zh")
+        self._lang_en_action.setChecked(cur == "en")
+        self._help_menu.setTitle(t("帮助(&H)", "&Help"))
+        self._open_kle_action.setText(t("打开 KLE 网站", "Open KLE Website"))
+        self._about_action.setText(t("关于(&A)", "&About"))
+        # 标签页
+        if hasattr(self, 'mode_tabs'):
+            self.mode_tabs.setTabText(0, t("单键设计", "Single Key"))
+            self.mode_tabs.setTabText(1, t("键盘设计", "Keyboard"))
+            self.mode_tabs.setTabText(2, t("键盘参数", "Keyboard Params"))
+        # 批量面板按钮
+        if hasattr(self, 'batch_panel'):
+            self.batch_panel.gen_btn.setText(t("生成当前选中 (预览)", "Generate Selected (Preview)"))
+            self.batch_panel.gen_all_btn.setText(t("生成所有按键预览", "Generate All Keys") if not getattr(self, '_batch_models_generated', False) else t("取消生成", "Cancel Generate"))
+            self.batch_panel.export_all_btn.setText(t("导出所有...", "Export All..."))
 
+    def _get_active_preview_2d(self):
+        """当前应对齐的 2D 预览：单键设计为单键 2D，键盘参数为键盘参数页的 2D。"""
+        if not hasattr(self, 'mode_tabs'):
+            return getattr(self, 'preview_2d_widget', None)
+        idx = self.mode_tabs.currentIndex()
+        if idx == 0:
+            return getattr(self, 'preview_2d_widget', None)
+        if idx == 2 and hasattr(self, 'batch_edit_tab') and hasattr(self.batch_edit_tab, 'preview_2d'):
+            return self.batch_edit_tab.preview_2d
+        return None
+    
+    def _apply_align_preset(self, preset: str):
+        """对当前活动的 2D 预览应用对齐预设（单键设计或键盘参数中选中的字符）"""
+        w = self._get_active_preview_2d()
+        if w and hasattr(w, 'apply_preset_position'):
+            w.apply_preset_position(preset)
+    
     def toggle_snap(self, checked):
         """切换吸附"""
         self.preview_2d_widget.set_snap_enabled(checked)
@@ -1717,18 +1839,24 @@ class MainWindow(QMainWindow):
         """显示设置对话框"""
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec_() == QDialog.Accepted:
-            # 更新2D预览的对齐设置
+            # 更新2D预览的对齐设置（吸附/网格由视图菜单控制，此处仅同步状态）
             snap_enabled = self.settings.get_snap_enabled()
             snap_grid = self.settings.get_snap_grid_size()
-            
             self.preview_2d_widget.set_snap_enabled(snap_enabled)
             self.preview_2d_widget.set_snap_grid_size(snap_grid)
-            
-            # 更新菜单状态
             self.snap_action_enable.setChecked(snap_enabled)
             for action in self.grid_actions:
                 if abs(action.data() - snap_grid) < 0.001:
                     action.setChecked(True)
+            # 使调节增量对单键设计立即生效（默认值在下次加载或新建时生效，避免覆盖当前编辑）
+            if hasattr(self, 'parameter_panel') and self.parameter_panel.settings:
+                s = self.parameter_panel.settings
+                self.parameter_panel.wall_spin.setSingleStep(s.get_wall_thickness_step())
+                self.parameter_panel.side_angle_spin.setSingleStep(s.get_side_angle_step())
+                self.parameter_panel.edge_radius_spin.setSingleStep(s.get_edge_radius_step())
+                self.parameter_panel.text_stroke_width_spin.setSingleStep(s.get_stroke_width_step())
+                self.parameter_panel.text_height_spin.setSingleStep(s.get_text_height_step())
+                self.parameter_panel.text_depth_spin.setSingleStep(s.get_text_depth_step())
     
     def load_settings(self):
         """加载设置"""

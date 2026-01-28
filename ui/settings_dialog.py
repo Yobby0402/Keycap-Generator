@@ -3,9 +3,11 @@
 """
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QDoubleSpinBox, QCheckBox, QPushButton, QGroupBox,
-                             QComboBox, QGridLayout)
+                             QComboBox, QGridLayout, QFileDialog, QFormLayout)
 from PyQt5.QtCore import Qt
 from core.settings import Settings
+from core.i18n import t
+from utils.file_utils import get_system_fonts, get_font_name
 
 
 class SettingsDialog(QDialog):
@@ -14,156 +16,312 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self.settings = settings
-        self.setWindowTitle("设置")
         self.setMinimumWidth(400)
         self.setup_ui()
+        self.retranslateUi()
         self.load_settings()
     
     def setup_ui(self):
-        """设置UI"""
+        """设置UI（文案由 retranslateUi 设置）"""
         layout = QVBoxLayout(self)
         
-        # 对齐设置组
-        snap_group = QGroupBox("对齐设置")
-        snap_layout = QVBoxLayout()
-        
-        # 启用对齐
-        self.snap_checkbox = QCheckBox("启用对齐吸附")
-        self.snap_checkbox.setChecked(self.settings.get_snap_enabled())
-        snap_layout.addWidget(self.snap_checkbox)
-        
-        # 网格大小
-        grid_layout = QHBoxLayout()
-        grid_layout.addWidget(QLabel("网格大小:"))
-        self.grid_spin = QDoubleSpinBox()
-        self.grid_spin.setRange(0.1, 10.0)
-        self.grid_spin.setValue(self.settings.get_snap_grid_size())
-        self.grid_spin.setDecimals(1)
-        self.grid_spin.setSuffix(" mm")
-        grid_layout.addWidget(self.grid_spin)
-        snap_layout.addLayout(grid_layout)
-        
-        snap_group.setLayout(snap_layout)
-        layout.addWidget(snap_group)
-        
         # 性能设置组
-        perf_group = QGroupBox("性能设置")
+        self.perf_group = QGroupBox("")
         perf_layout = QVBoxLayout()
         
-        self.auto_update_checkbox = QCheckBox("开启实时刷新 (修改参数或拖动时自动重新计算模型)")
-        self.auto_update_checkbox.setToolTip("开启后，修改参数或拖动文字结束后会自动重新生成模型。\n警告：复杂模型可能会导致卡顿。")
+        self.auto_update_checkbox = QCheckBox("")
+        self.auto_update_checkbox.setToolTip("")
         perf_layout.addWidget(self.auto_update_checkbox)
         
-        perf_group.setLayout(perf_layout)
-        layout.addWidget(perf_group)
+        self.perf_group.setLayout(perf_layout)
+        layout.addWidget(self.perf_group)
         
-        # 默认参数设置组
-        default_params_group = QGroupBox("默认按键参数")
+        # 默认参数设置组（对单键设计和键盘参数对应项生效）
+        self.default_params_group = QGroupBox("")
         default_params_layout = QVBoxLayout()
+        self.form = QFormLayout()
         
-        # 默认侧面斜角
-        side_angle_layout = QHBoxLayout()
-        side_angle_layout.addWidget(QLabel("默认侧面斜角:"))
+        # 默认字体（可点击下拉选择，中文名优先显示）
+        font_row = QHBoxLayout()
+        self.default_font_combo = QComboBox()
+        self.default_font_combo.setEditable(False)
+        self._fill_font_combo()
+        self.browse_font_btn = QPushButton("")
+        self.browse_font_btn.clicked.connect(self._browse_default_font)
+        font_row.addWidget(self.default_font_combo)
+        font_row.addWidget(self.browse_font_btn)
+        self._default_font_label = QLabel("")
+        self.form.addRow(self._default_font_label, font_row)
+        
+        # 默认线宽、线宽调节增量
+        self.default_stroke_width_spin = QDoubleSpinBox()
+        self.default_stroke_width_spin.setRange(0.0, 2.0)
+        self.default_stroke_width_spin.setDecimals(2)
+        self.default_stroke_width_spin.setSuffix(" mm")
+        self._stroke_width_label = QLabel("")
+        self.form.addRow(self._stroke_width_label, self.default_stroke_width_spin)
+        self.stroke_width_step_spin = QDoubleSpinBox()
+        self.stroke_width_step_spin.setRange(0.01, 0.5)
+        self.stroke_width_step_spin.setDecimals(2)
+        self.stroke_width_step_spin.setSuffix(" mm")
+        self._stroke_width_step_label = QLabel("")
+        self.form.addRow(self._stroke_width_step_label, self.stroke_width_step_spin)
+        
+        # 默认壁厚、壁厚调节增量
+        self.default_wall_spin = QDoubleSpinBox()
+        self.default_wall_spin.setRange(0.5, 5.0)
+        self.default_wall_spin.setDecimals(2)
+        self.default_wall_spin.setSuffix(" mm")
+        self._wall_label = QLabel("")
+        self.form.addRow(self._wall_label, self.default_wall_spin)
+        self.wall_step_spin = QDoubleSpinBox()
+        self.wall_step_spin.setRange(0.05, 1.0)
+        self.wall_step_spin.setDecimals(2)
+        self.wall_step_spin.setSuffix(" mm")
+        self._wall_step_label = QLabel("")
+        self.form.addRow(self._wall_step_label, self.wall_step_spin)
+        
+        # 默认侧面斜角、调节增量
         self.default_side_angle_spin = QDoubleSpinBox()
         self.default_side_angle_spin.setRange(0.0, 30.0)
         self.default_side_angle_spin.setDecimals(1)
         self.default_side_angle_spin.setSuffix(" °")
-        side_angle_layout.addWidget(self.default_side_angle_spin)
-        default_params_layout.addLayout(side_angle_layout)
+        self._side_angle_label = QLabel("")
+        self.form.addRow(self._side_angle_label, self.default_side_angle_spin)
+        self.side_angle_step_spin = QDoubleSpinBox()
+        self.side_angle_step_spin.setRange(0.1, 2.0)
+        self.side_angle_step_spin.setDecimals(1)
+        self.side_angle_step_spin.setSuffix(" °")
+        self._side_angle_step_label = QLabel("")
+        self.form.addRow(self._side_angle_step_label, self.side_angle_step_spin)
         
-        # 默认边缘形状
-        edge_mode_layout = QHBoxLayout()
-        edge_mode_layout.addWidget(QLabel("默认边缘类型:"))
+        # 边缘类型、边缘半径、边缘半径调节增量
         self.default_edge_mode_combo = QComboBox()
-        self.default_edge_mode_combo.addItems(["圆角", "45度斜角"])
-        edge_mode_layout.addWidget(self.default_edge_mode_combo)
-        default_params_layout.addLayout(edge_mode_layout)
-
-        edge_radius_layout = QHBoxLayout()
-        edge_radius_layout.addWidget(QLabel("默认边缘半径:"))
+        self.default_edge_mode_combo.addItems([t("圆角", "Fillet"), t("45度斜角", "45° Chamfer")])
+        self._edge_mode_label = QLabel("")
+        self.form.addRow(self._edge_mode_label, self.default_edge_mode_combo)
         self.default_edge_radius_spin = QDoubleSpinBox()
         self.default_edge_radius_spin.setRange(0.0, 5.0)
         self.default_edge_radius_spin.setDecimals(2)
         self.default_edge_radius_spin.setSuffix(" mm")
-        edge_radius_layout.addWidget(self.default_edge_radius_spin)
-        default_params_layout.addLayout(edge_radius_layout)
+        self._edge_radius_label = QLabel("")
+        self.form.addRow(self._edge_radius_label, self.default_edge_radius_spin)
+        self.edge_radius_step_spin = QDoubleSpinBox()
+        self.edge_radius_step_spin.setRange(0.01, 0.5)
+        self.edge_radius_step_spin.setDecimals(2)
+        self.edge_radius_step_spin.setSuffix(" mm")
+        self._edge_radius_step_label = QLabel("")
+        self.form.addRow(self._edge_radius_step_label, self.edge_radius_step_spin)
 
         edge_apply_layout = QHBoxLayout()
-        self.default_edge_outer_check = QCheckBox("外侧边缘生效")
-        self.default_edge_inner_check = QCheckBox("内侧边缘生效")
+        self.default_edge_outer_check = QCheckBox("")
+        self.default_edge_inner_check = QCheckBox("")
         edge_apply_layout.addWidget(self.default_edge_outer_check)
         edge_apply_layout.addWidget(self.default_edge_inner_check)
-        default_params_layout.addLayout(edge_apply_layout)
+        self._edge_apply_label = QLabel("")
+        self.form.addRow(self._edge_apply_label, edge_apply_layout)
 
         edge_sides_layout = QGridLayout()
-        self.default_edge_left_check = QCheckBox("左")
-        self.default_edge_right_check = QCheckBox("右")
-        self.default_edge_top_check = QCheckBox("上")
-        self.default_edge_bottom_check = QCheckBox("下")
-        edge_sides_layout.addWidget(QLabel("生效边:"), 0, 0)
-        edge_sides_layout.addWidget(self.default_edge_left_check, 0, 1)
-        edge_sides_layout.addWidget(self.default_edge_right_check, 0, 2)
-        edge_sides_layout.addWidget(self.default_edge_top_check, 1, 1)
-        edge_sides_layout.addWidget(self.default_edge_bottom_check, 1, 2)
-        default_params_layout.addLayout(edge_sides_layout)
+        self.default_edge_left_check = QCheckBox("")
+        self.default_edge_right_check = QCheckBox("")
+        self.default_edge_top_check = QCheckBox("")
+        self.default_edge_bottom_check = QCheckBox("")
+        edge_sides_layout.addWidget(self.default_edge_left_check, 0, 0)
+        edge_sides_layout.addWidget(self.default_edge_right_check, 0, 1)
+        edge_sides_layout.addWidget(self.default_edge_top_check, 1, 0)
+        edge_sides_layout.addWidget(self.default_edge_bottom_check, 1, 1)
+        self._edge_sides_label = QLabel("")
+        self.form.addRow(self._edge_sides_label, edge_sides_layout)
         
-        default_params_group.setLayout(default_params_layout)
-        layout.addWidget(default_params_group)
+        # 文字参数
+        self.default_text_height_spin = QDoubleSpinBox()
+        self.default_text_height_spin.setRange(0.5, 20.0)
+        self.default_text_height_spin.setDecimals(2)
+        self.default_text_height_spin.setSuffix(" mm")
+        self._text_height_label = QLabel("")
+        self.form.addRow(self._text_height_label, self.default_text_height_spin)
+        self.text_height_step_spin = QDoubleSpinBox()
+        self.text_height_step_spin.setRange(0.05, 1.0)
+        self.text_height_step_spin.setDecimals(2)
+        self.text_height_step_spin.setSuffix(" mm")
+        self._text_height_step_label = QLabel("")
+        self.form.addRow(self._text_height_step_label, self.text_height_step_spin)
+        self.default_text_depth_spin = QDoubleSpinBox()
+        self.default_text_depth_spin.setRange(-2.0, 2.0)
+        self.default_text_depth_spin.setDecimals(2)
+        self.default_text_depth_spin.setSuffix(" mm")
+        self._text_depth_label = QLabel("")
+        self.form.addRow(self._text_depth_label, self.default_text_depth_spin)
+        self.text_depth_step_spin = QDoubleSpinBox()
+        self.text_depth_step_spin.setRange(0.01, 0.2)
+        self.text_depth_step_spin.setDecimals(2)
+        self.text_depth_step_spin.setSuffix(" mm")
+        self._text_depth_step_label = QLabel("")
+        self.form.addRow(self._text_depth_step_label, self.text_depth_step_spin)
+        
+        default_params_layout.addLayout(self.form)
+        self.default_params_group.setLayout(default_params_layout)
+        layout.addWidget(self.default_params_group)
         
         # 按钮
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
-        ok_btn = QPushButton("确定")
-        ok_btn.clicked.connect(self.accept)
-        button_layout.addWidget(ok_btn)
+        self.ok_btn = QPushButton("")
+        self.ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(self.ok_btn)
         
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
+        self.cancel_btn = QPushButton("")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_btn)
         
         layout.addLayout(button_layout)
     
+    def retranslateUi(self):
+        """根据当前语言更新对话框文案"""
+        self.setWindowTitle(t("设置", "Settings"))
+        self.perf_group.setTitle(t("性能设置", "Performance"))
+        self.auto_update_checkbox.setText(t("开启实时刷新 (修改参数或拖动时自动重新计算模型)", "Enable real-time refresh (auto-recalculate on parameter change or drag)"))
+        self.auto_update_checkbox.setToolTip(t("开启后，修改参数或拖动文字结束后会自动重新生成模型。\n警告：复杂模型可能会导致卡顿。", "When enabled, model regenerates automatically after parameter changes or text drag.\nWarning: Complex models may cause lag."))
+        self.default_params_group.setTitle(t("默认按键参数", "Default Key Parameters"))
+        self._default_font_label.setText(t("默认字体:", "Default font:"))
+        self.browse_font_btn.setText(t("浏览...", "Browse..."))
+        self._stroke_width_label.setText(t("默认线宽:", "Default stroke width:"))
+        self._stroke_width_step_label.setText(t("线宽调节增量:", "Stroke width step:"))
+        self._wall_label.setText(t("默认壁厚:", "Default wall thickness:"))
+        self._wall_step_label.setText(t("壁厚调节增量:", "Wall thickness step:"))
+        self._side_angle_label.setText(t("默认侧面斜角:", "Default side angle:"))
+        self._side_angle_step_label.setText(t("侧面斜角调节增量:", "Side angle step:"))
+        self._edge_mode_label.setText(t("默认边缘类型:", "Default edge type:"))
+        self._edge_radius_label.setText(t("默认边缘半径:", "Default edge radius:"))
+        self._edge_radius_step_label.setText(t("边缘半径调节增量:", "Edge radius step:"))
+        self._edge_apply_label.setText(t("边缘生效:", "Edge apply:"))
+        self.default_edge_outer_check.setText(t("外侧边缘生效", "Outer edge"))
+        self.default_edge_inner_check.setText(t("内侧边缘生效", "Inner edge"))
+        self._edge_sides_label.setText(t("生效边:", "Active sides:"))
+        self.default_edge_left_check.setText(t("左", "Left"))
+        self.default_edge_right_check.setText(t("右", "Right"))
+        self.default_edge_top_check.setText(t("上", "Top"))
+        self.default_edge_bottom_check.setText(t("下", "Bottom"))
+        self._text_height_label.setText(t("默认文字高度:", "Default text height:"))
+        self._text_height_step_label.setText(t("文字高度调节增量:", "Text height step:"))
+        self._text_depth_label.setText(t("默认文字深度:", "Default text depth:"))
+        self._text_depth_step_label.setText(t("文字深度调节增量:", "Text depth step:"))
+        self.ok_btn.setText(t("确定", "OK"))
+        self.cancel_btn.setText(t("取消", "Cancel"))
+        # 更新边缘类型下拉（需重新设置项）
+        current = self.default_edge_mode_combo.currentText()
+        self.default_edge_mode_combo.clear()
+        self.default_edge_mode_combo.addItems([t("圆角", "Fillet"), t("45度斜角", "45° Chamfer")])
+        if current in [t("圆角", "Fillet"), t("45度斜角", "45° Chamfer")]:
+            self.default_edge_mode_combo.setCurrentText(current)
+        elif current == "圆角" or current == "Fillet":
+            self.default_edge_mode_combo.setCurrentText(t("圆角", "Fillet"))
+        elif current == "45度斜角" or current == "45° Chamfer":
+            self.default_edge_mode_combo.setCurrentText(t("45度斜角", "45° Chamfer"))
+    
+    def _fill_font_combo(self):
+        """填充默认字体下拉框，显示名用 get_font_name（中文优先）"""
+        self.default_font_combo.clear()
+        self.default_font_combo.addItem(t("未设置", "Not set"), None)
+        try:
+            for font_path in get_system_fonts():
+                name = get_font_name(font_path)
+                self.default_font_combo.addItem(name, font_path)
+        except Exception as e:
+            print(f"加载系统字体列表时出错: {e}")
+    
+    def _browse_default_font(self):
+        """浏览选择默认字体文件，选中后加入下拉并设为当前项"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, t("选择默认字体", "Select Default Font"),
+            "", t("字体文件 (*.ttf *.otf *.ttc);;所有文件 (*.*)", "Font files (*.ttf *.otf *.ttc);;All files (*.*)")
+        )
+        if not path:
+            return
+        for i in range(self.default_font_combo.count()):
+            if self.default_font_combo.itemData(i) == path:
+                self.default_font_combo.setCurrentIndex(i)
+                return
+        name = get_font_name(path)
+        self.default_font_combo.addItem(name, path)
+        self.default_font_combo.setCurrentIndex(self.default_font_combo.count() - 1)
+    
     def load_settings(self):
         """加载设置"""
-        self.snap_checkbox.setChecked(self.settings.get_snap_enabled())
-        self.grid_spin.setValue(self.settings.get_snap_grid_size())
         self.auto_update_checkbox.setChecked(self.settings.get_auto_update())
         
-        # 加载默认参数
+        # 默认字体：在列表中按路径找对应项并选中；若未在列表中则插入一项并选中
+        fp = self.settings.get_default_font_path()
+        idx = -1
+        for i in range(self.default_font_combo.count()):
+            if self.default_font_combo.itemData(i) == fp:
+                idx = i
+                break
+        if idx >= 0:
+            self.default_font_combo.setCurrentIndex(idx)
+        elif fp:
+            self.default_font_combo.addItem(get_font_name(fp), fp)
+            self.default_font_combo.setCurrentIndex(self.default_font_combo.count() - 1)
+        else:
+            self.default_font_combo.setCurrentIndex(0)
+        
+        # 线宽
+        self.default_stroke_width_spin.setValue(self.settings.get_default_stroke_width())
+        self.stroke_width_step_spin.setValue(self.settings.get_stroke_width_step())
+        # 壁厚
+        self.default_wall_spin.setValue(self.settings.get_default_wall_thickness())
+        self.wall_step_spin.setValue(self.settings.get_wall_thickness_step())
+        # 侧面斜角
         self.default_side_angle_spin.setValue(self.settings.get_default_side_angle())
-
-        # 边缘形状默认参数
-        mode_map = {"fillet": "圆角", "chamfer": "45度斜角"}
-        default_mode = self.settings.get_default_edge_profile_mode()
-        self.default_edge_mode_combo.setCurrentText(mode_map.get(default_mode, "圆角"))
+        self.side_angle_step_spin.setValue(self.settings.get_side_angle_step())
+        # 边缘
+        mode_map = {"fillet": t("圆角", "Fillet"), "chamfer": t("45度斜角", "45° Chamfer")}
+        self.default_edge_mode_combo.setCurrentText(mode_map.get(
+            self.settings.get_default_edge_profile_mode(), t("圆角", "Fillet")))
         self.default_edge_radius_spin.setValue(self.settings.get_default_edge_profile_radius())
+        self.edge_radius_step_spin.setValue(self.settings.get_edge_radius_step())
         self.default_edge_outer_check.setChecked(self.settings.get_default_edge_profile_outer())
         self.default_edge_inner_check.setChecked(self.settings.get_default_edge_profile_inner())
         self.default_edge_left_check.setChecked(self.settings.get_default_edge_profile_left())
         self.default_edge_right_check.setChecked(self.settings.get_default_edge_profile_right())
         self.default_edge_top_check.setChecked(self.settings.get_default_edge_profile_top())
         self.default_edge_bottom_check.setChecked(self.settings.get_default_edge_profile_bottom())
+        # 文字参数
+        self.default_text_height_spin.setValue(self.settings.get_default_text_height())
+        self.text_height_step_spin.setValue(self.settings.get_text_height_step())
+        self.default_text_depth_spin.setValue(self.settings.get_default_text_depth())
+        self.text_depth_step_spin.setValue(self.settings.get_text_depth_step())
     
     def save_settings(self):
         """保存设置"""
-        self.settings.set_snap_enabled(self.snap_checkbox.isChecked())
-        self.settings.set_snap_grid_size(self.grid_spin.value())
         self.settings.set_auto_update(self.auto_update_checkbox.isChecked())
         
-        # 保存默认参数
+        path = self.default_font_combo.currentData()
+        self.settings.set_default_font_path(path)
+        self.settings.set_default_stroke_width(self.default_stroke_width_spin.value())
+        self.settings.set_stroke_width_step(self.stroke_width_step_spin.value())
+        self.settings.set_default_wall_thickness(self.default_wall_spin.value())
+        self.settings.set_wall_thickness_step(self.wall_step_spin.value())
         self.settings.set_default_side_angle(self.default_side_angle_spin.value())
-
-        # 边缘形状默认参数
-        mode_map = {"圆角": "fillet", "45度斜角": "chamfer"}
-        self.settings.set_default_edge_profile_mode(mode_map.get(self.default_edge_mode_combo.currentText(), "fillet"))
+        self.settings.set_side_angle_step(self.side_angle_step_spin.value())
+        
+        mode_map = {t("圆角", "Fillet"): "fillet", t("45度斜角", "45° Chamfer"): "chamfer"}
+        self.settings.set_default_edge_profile_mode(
+            mode_map.get(self.default_edge_mode_combo.currentText(), "fillet"))
         self.settings.set_default_edge_profile_radius(self.default_edge_radius_spin.value())
+        self.settings.set_edge_radius_step(self.edge_radius_step_spin.value())
         self.settings.set_default_edge_profile_outer(self.default_edge_outer_check.isChecked())
         self.settings.set_default_edge_profile_inner(self.default_edge_inner_check.isChecked())
         self.settings.set_default_edge_profile_left(self.default_edge_left_check.isChecked())
         self.settings.set_default_edge_profile_right(self.default_edge_right_check.isChecked())
         self.settings.set_default_edge_profile_top(self.default_edge_top_check.isChecked())
         self.settings.set_default_edge_profile_bottom(self.default_edge_bottom_check.isChecked())
+        
+        self.settings.set_default_text_height(self.default_text_height_spin.value())
+        self.settings.set_text_height_step(self.text_height_step_spin.value())
+        self.settings.set_default_text_depth(self.default_text_depth_spin.value())
+        self.settings.set_text_depth_step(self.text_depth_step_spin.value())
     
     def accept(self):
         """确定按钮"""

@@ -1,10 +1,19 @@
 """
 3MF文件导出
-支持多材质/多颜色对象
+支持多材质/多颜色对象；批量导出时按按键颜色区分
 """
 import cadquery as cq
 from pathlib import Path
+from typing import List, Tuple, Optional
 from utils.file_utils import ensure_directory
+
+
+def _hex_to_rgba(hex_color: str) -> List[int]:
+    """#RRGGBB -> [r,g,b,255]"""
+    h = (hex_color or "#cccccc").lstrip("#")
+    if len(h) == 6:
+        return [int(h[i:i+2], 16) for i in (0, 2, 4)] + [255]
+    return [204, 204, 204, 255]
 
 
 def export_3mf(keycap_model: cq.Workplane,
@@ -85,6 +94,75 @@ def export_3mf(keycap_model: cq.Workplane,
         return False
     except Exception as e:
         print(f"导出3MF文件时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def export_3mf_batch(
+    items: List[Tuple[cq.Workplane, Optional[cq.Workplane], str, str]],
+    filepath: str
+) -> bool:
+    """
+    批量导出 3MF，同种 (key_color, text_color) 的键帽/文字分别合并为一个 mesh，
+    便于在切片软件中按耗材种类批量设置。
+    items: [(keycap_model, text_model, key_color_hex, text_color_hex), ...]
+    """
+    try:
+        import trimesh
+        import tempfile
+        import os as os_module
+
+        if not items:
+            return False
+        ensure_directory(str(Path(filepath).parent))
+
+        # 按 (key_color, text_color) 分组
+        groups: dict = {}  # (kc_hex, tc_hex) -> [(keycap_wp, text_wp), ...]
+        for keycap_model, text_model, kc_hex, tc_hex in items:
+            kc = kc_hex or "#cccccc"
+            tc = tc_hex or "#000000"
+            key = (kc, tc)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append((keycap_model, text_model))
+
+        def _safe(s: str) -> str:
+            return (s or "").replace("#", "_")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scene = trimesh.Scene()
+            for (kc_hex, tc_hex), group_items in groups.items():
+                kc_rgba = _hex_to_rgba(kc_hex)
+                tc_rgba = _hex_to_rgba(tc_hex)
+                sk, st = _safe(kc_hex), _safe(tc_hex)
+                keycap_meshes = []
+                text_meshes = []
+                for idx, (keycap_model, text_model) in enumerate(group_items):
+                    if keycap_model:
+                        kp_tmp = os_module.path.join(tmpdir, f"kp_{sk}_{st}_{idx}.stl")
+                        cq.exporters.export(keycap_model, kp_tmp)
+                        keycap_meshes.append(trimesh.load(kp_tmp))
+                    if text_model:
+                        tx_tmp = os_module.path.join(tmpdir, f"tx_{sk}_{st}_{idx}.stl")
+                        cq.exporters.export(text_model, tx_tmp)
+                        text_meshes.append(trimesh.load(tx_tmp))
+                if keycap_meshes:
+                    merged_keycap = trimesh.util.concatenate(keycap_meshes)
+                    merged_keycap.visual.vertex_colors = kc_rgba
+                    scene.add_geometry(merged_keycap, node_name=f"Keycap_{sk}_{st}")
+                if text_meshes:
+                    merged_text = trimesh.util.concatenate(text_meshes)
+                    merged_text.visual.vertex_colors = tc_rgba
+                    scene.add_geometry(merged_text, node_name=f"Text_{sk}_{st}")
+            scene.export(filepath, file_type='3mf')
+        print(f"3MF 批量（同色已合并，便于按耗材设置）已导出: {filepath}")
+        return True
+    except ImportError:
+        print("错误: 需要安装 trimesh 库才能导出3MF格式")
+        return False
+    except Exception as e:
+        print(f"导出3MF批量时出错: {e}")
         import traceback
         traceback.print_exc()
         return False

@@ -3,7 +3,7 @@
 用于批量编辑同一类型按键的样式
 """
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional  # Optional used for key_color, text_color
 from core.key_type_analyzer import KeyTypeSignature
 from core.parameters import KeycapGeometry
 from core.legend_mapping import LegendStyle
@@ -16,6 +16,9 @@ class BatchEditConfig:
     geometry: KeycapGeometry  # 几何参数（所有该类型按键共用）
     text_styles: Dict[int, LegendStyle] = field(default_factory=dict)  # 位置索引 -> 样式
     # 例如：{0: LegendStyle(size=3.0, ...), 9: LegendStyle(size=5.0, ...)}
+    # 按键颜色（应用时写回该类型按键，更新一次，不锁定）
+    key_color: Optional[str] = None    # 按键底色，如 "#618a40"；None 表示不覆盖
+    text_color: Optional[str] = None  # 文字颜色，如 "#eee2d0"；None 表示不覆盖
     
     def get_style_for_position(self, position_index: int, default_font_path: Optional[str] = None) -> LegendStyle:
         """

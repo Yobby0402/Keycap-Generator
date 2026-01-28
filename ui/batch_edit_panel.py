@@ -5,14 +5,16 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QGroupBox, QDoubleSpinBox, QPushButton, QScrollArea,
                              QFormLayout, QLineEdit, QFileDialog, QComboBox,
-                             QCheckBox, QGridLayout)
+                             QCheckBox, QGridLayout, QColorDialog)
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QColor
 from typing import Optional
 from core.key_type_analyzer import KeyTypeSignature
 from core.batch_edit_config import BatchEditConfig
 from core.parameters import KeycapGeometry
 from core.legend_mapping import LegendStyle, KLE_POSITION_NAMES
 from core.keycap_presets import u_to_mm
+from core.i18n import t
 from utils.file_utils import get_system_fonts, get_font_name
 
 
@@ -24,13 +26,15 @@ class BatchEditPanel(QWidget):
     # 信号：配置改变（实时预览）
     config_changed = pyqtSignal(BatchEditConfig)
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
+        self.settings = settings  # 用于调节增量等，对键盘参数对应项生效
         self.current_type: Optional[KeyTypeSignature] = None
         self.current_config: Optional[BatchEditConfig] = None
         self.style_widgets: dict = {}  # {位置索引: 样式控件组}
         self.default_font_path: Optional[str] = None  # 默认字体路径
         self.setup_ui()
+        self.retranslateUi()
     
     def setup_ui(self):
         """设置UI"""
@@ -38,7 +42,7 @@ class BatchEditPanel(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         
         # 类型信息
-        self.type_label = QLabel("未选择类型")
+        self.type_label = QLabel("")
         self.type_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(self.type_label)
         
@@ -52,19 +56,19 @@ class BatchEditPanel(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         
         # 几何参数（共用）
-        self.geometry_group = QGroupBox("几何参数（所有该类型按键共用）")
+        self.geometry_group = QGroupBox("")
         self.geometry_layout = QFormLayout()
         self.geometry_group.setLayout(self.geometry_layout)
         content_layout.addWidget(self.geometry_group)
         
         # 弧面设置（与单键参数面板一致）
-        self.curved_group = QGroupBox("弧面设置")
+        self.curved_group = QGroupBox("")
         self.curved_layout = QFormLayout()
         self.curved_group.setLayout(self.curved_layout)
         content_layout.addWidget(self.curved_group)
         
         # 字符样式（按位置）
-        self.style_group = QGroupBox("字符样式")
+        self.style_group = QGroupBox("")
         self.style_layout = QVBoxLayout()
         self.style_group.setLayout(self.style_layout)
         content_layout.addWidget(self.style_group)
@@ -74,7 +78,7 @@ class BatchEditPanel(QWidget):
         layout.addWidget(scroll)
         
         # 保存按钮（可由外部隐藏，例如在键盘参数页把按钮放在右侧列）
-        self.save_btn = QPushButton("保存并应用到所有该类型按键")
+        self.save_btn = QPushButton("")
         self.save_btn.setStyleSheet("font-weight: bold; padding: 8px;")
         self.save_btn.clicked.connect(self.save_and_apply)
         self.save_btn.setEnabled(False)
@@ -90,15 +94,15 @@ class BatchEditPanel(QWidget):
         self.current_config = config
         
         # 更新类型标签
-        self.type_label.setText(f"类型: {key_type.to_string()}")
+        self.type_label.setText(f"{t('类型:', 'Type:')} {key_type.to_string()}")
         
         # 清除旧控件
         self._clear_layout(self.geometry_layout)
         self._clear_layout(self.curved_layout)
         self._clear_style_widgets()
         
-        # 加载几何参数（含弧面设置）
-        self._load_geometry(config.geometry)
+        # 加载几何参数（含弧面、颜色）
+        self._load_geometry(config.geometry, config)
         
         # 加载字符样式（只为有字符的位置创建控件）
         self._load_text_styles(key_type, config)
@@ -106,8 +110,9 @@ class BatchEditPanel(QWidget):
         # 启用保存按钮
         self.save_btn.setEnabled(True)
     
-    def _load_geometry(self, geometry: KeycapGeometry):
-        """加载几何参数控件"""
+    def _load_geometry(self, geometry: KeycapGeometry, config: Optional[BatchEditConfig] = None):
+        """加载几何参数控件（调节增量来自设置）；config 非空时追加按键/文字颜色（应用时写回该类型按键）"""
+        s = self.settings
         # 深度
         depth_spin = QDoubleSpinBox()
         depth_spin.setRange(1.0, 20.0)
@@ -115,7 +120,18 @@ class BatchEditPanel(QWidget):
         depth_spin.setDecimals(1)
         depth_spin.setSuffix(" mm")
         depth_spin.valueChanged.connect(lambda v: self._on_geometry_changed('key_depth', v))
-        self.geometry_layout.addRow("深度:", depth_spin)
+        self.geometry_layout.addRow(t("深度:", "Depth:"), depth_spin)
+        
+        # 壁厚
+        wall_spin = QDoubleSpinBox()
+        wall_spin.setRange(0.5, 5.0)
+        wall_spin.setValue(getattr(geometry, 'wall_thickness', 1.0))
+        wall_spin.setDecimals(2)
+        wall_spin.setSuffix(" mm")
+        if s:
+            wall_spin.setSingleStep(s.get_wall_thickness_step())
+        wall_spin.valueChanged.connect(lambda v: self._on_geometry_changed('wall_thickness', v))
+        self.geometry_layout.addRow(t("壁厚:", "Wall thickness:"), wall_spin)
         
         # 侧面斜角
         side_angle_spin = QDoubleSpinBox()
@@ -123,43 +139,47 @@ class BatchEditPanel(QWidget):
         side_angle_spin.setValue(geometry.side_angle)
         side_angle_spin.setDecimals(1)
         side_angle_spin.setSuffix("°")
+        if s:
+            side_angle_spin.setSingleStep(s.get_side_angle_step())
         side_angle_spin.valueChanged.connect(lambda v: self._on_geometry_changed('side_angle', v))
-        self.geometry_layout.addRow("侧面斜角:", side_angle_spin)
+        self.geometry_layout.addRow(t("侧面斜角:", "Side angle:"), side_angle_spin)
         
         # 边缘形状设置
         edge_mode_combo = QComboBox()
-        edge_mode_combo.addItems(["圆角", "45度斜角"])
+        edge_mode_combo.addItems([t("圆角", "Fillet"), t("45度斜角", "45° Chamfer")])
         current_mode = getattr(geometry, 'edge_profile_mode', "fillet")
-        edge_mode_combo.setCurrentText("45度斜角" if current_mode == "chamfer" else "圆角")
+        edge_mode_combo.setCurrentText(t("45度斜角", "45° Chamfer") if current_mode == "chamfer" else t("圆角", "Fillet"))
         edge_mode_combo.currentTextChanged.connect(
             lambda text: self._on_geometry_changed('edge_profile_mode',
-                                                   "chamfer" if text == "45度斜角" else "fillet"))
-        self.geometry_layout.addRow("边缘类型:", edge_mode_combo)
+                                                   "chamfer" if text == t("45度斜角", "45° Chamfer") else "fillet"))
+        self.geometry_layout.addRow(t("边缘类型:", "Edge type:"), edge_mode_combo)
 
         edge_radius_spin = QDoubleSpinBox()
         edge_radius_spin.setRange(0.0, 5.0)
         edge_radius_spin.setValue(getattr(geometry, 'edge_profile_radius', 0.0))
         edge_radius_spin.setDecimals(2)
         edge_radius_spin.setSuffix(" mm")
+        if s:
+            edge_radius_spin.setSingleStep(s.get_edge_radius_step())
         edge_radius_spin.valueChanged.connect(lambda v: self._on_geometry_changed('edge_profile_radius', v))
-        self.geometry_layout.addRow("边缘半径:", edge_radius_spin)
+        self.geometry_layout.addRow(t("边缘半径:", "Edge radius:"), edge_radius_spin)
 
         edge_apply_layout = QHBoxLayout()
-        edge_outer_check = QCheckBox("外侧边缘")
+        edge_outer_check = QCheckBox(t("外侧边缘", "Outer edge"))
         edge_outer_check.setChecked(getattr(geometry, 'edge_profile_outer', True))
         edge_outer_check.stateChanged.connect(lambda v: self._on_geometry_changed('edge_profile_outer', v == Qt.Checked))
-        edge_inner_check = QCheckBox("内侧边缘")
+        edge_inner_check = QCheckBox(t("内侧边缘", "Inner edge"))
         edge_inner_check.setChecked(getattr(geometry, 'edge_profile_inner', False))
         edge_inner_check.stateChanged.connect(lambda v: self._on_geometry_changed('edge_profile_inner', v == Qt.Checked))
         edge_apply_layout.addWidget(edge_outer_check)
         edge_apply_layout.addWidget(edge_inner_check)
-        self.geometry_layout.addRow("生效范围:", edge_apply_layout)
+        self.geometry_layout.addRow(t("生效范围:", "Apply to:"), edge_apply_layout)
 
         edge_sides_layout = QGridLayout()
-        edge_left_check = QCheckBox("左")
-        edge_right_check = QCheckBox("右")
-        edge_top_check = QCheckBox("上")
-        edge_bottom_check = QCheckBox("下")
+        edge_left_check = QCheckBox(t("左", "Left"))
+        edge_right_check = QCheckBox(t("右", "Right"))
+        edge_top_check = QCheckBox(t("上", "Top"))
+        edge_bottom_check = QCheckBox(t("下", "Bottom"))
         edge_left_check.setChecked(getattr(geometry, 'edge_profile_left', True))
         edge_right_check.setChecked(getattr(geometry, 'edge_profile_right', True))
         edge_top_check.setChecked(getattr(geometry, 'edge_profile_top', True))
@@ -172,7 +192,7 @@ class BatchEditPanel(QWidget):
         edge_sides_layout.addWidget(edge_right_check, 0, 1)
         edge_sides_layout.addWidget(edge_top_check, 1, 0)
         edge_sides_layout.addWidget(edge_bottom_check, 1, 1)
-        self.geometry_layout.addRow("生效边:", edge_sides_layout)
+        self.geometry_layout.addRow(t("生效边:", "Active sides:"), edge_sides_layout)
 
         # 圆角半径
         corner_radius_spin = QDoubleSpinBox()
@@ -181,21 +201,21 @@ class BatchEditPanel(QWidget):
         corner_radius_spin.setDecimals(2)
         corner_radius_spin.setSuffix(" mm")
         corner_radius_spin.valueChanged.connect(lambda v: self._on_geometry_changed('corner_radius', v))
-        self.geometry_layout.addRow("圆角半径:", corner_radius_spin)
+        self.geometry_layout.addRow(t("圆角半径:", "Corner radius:"), corner_radius_spin)
         
         # 卫星轴设置（QCheckBox/QComboBox 已在文件顶部导入）
-        stabilizer_enabled_check = QCheckBox("启用卫星轴连接器")
+        stabilizer_enabled_check = QCheckBox(t("启用卫星轴连接器", "Enable stabilizer"))
         stabilizer_enabled_check.setChecked(getattr(geometry, 'stabilizer_enabled', False))
         stabilizer_enabled_check.stateChanged.connect(lambda v: self._on_geometry_changed('stabilizer_enabled', v == Qt.Checked))
         self.geometry_layout.addRow("", stabilizer_enabled_check)
         
         # 卫星轴类型选择（常用两种：2u和6.25u）
         stabilizer_type_combo = QComboBox()
-        stabilizer_type_combo.addItem("自定义", -1)
-        stabilizer_type_combo.addItem("2u (标准)", 2.0)
-        stabilizer_type_combo.addItem("6.25u (空格键)", 6.25)
+        stabilizer_type_combo.addItem(t("自定义", "Custom"), -1)
+        stabilizer_type_combo.addItem(t("2u (标准)", "2u (Standard)"), 2.0)
+        stabilizer_type_combo.addItem(t("6.25u (空格键)", "6.25u (Spacebar)"), 6.25)
         stabilizer_type_combo.currentIndexChanged.connect(lambda idx: self._on_stabilizer_type_changed(stabilizer_type_combo, stabilizer_length_spin))
-        self.geometry_layout.addRow("卫星轴类型:", stabilizer_type_combo)
+        self.geometry_layout.addRow(t("卫星轴类型:", "Stabilizer type:"), stabilizer_type_combo)
         
         stabilizer_length_spin = QDoubleSpinBox()
         stabilizer_length_spin.setRange(10.0, 200.0)
@@ -205,7 +225,7 @@ class BatchEditPanel(QWidget):
         stabilizer_length_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stabilizer_length', v))
         # 当长度改变时，如果与预设值不匹配，切换到"自定义"
         stabilizer_length_spin.valueChanged.connect(lambda v: self._update_stabilizer_type_combo(stabilizer_type_combo, v))
-        self.geometry_layout.addRow("卫星轴长度:", stabilizer_length_spin)
+        self.geometry_layout.addRow(t("卫星轴长度:", "Stabilizer length:"), stabilizer_length_spin)
         
         # 初始化类型选择
         current_length = getattr(geometry, 'stabilizer_length', 50.0)
@@ -217,18 +237,41 @@ class BatchEditPanel(QWidget):
         else:
             stabilizer_type_combo.setCurrentIndex(0)
         
+        # 按键/文字颜色（应用时写回该类型按键，更新一次不锁定）
+        if config is not None:
+            key_color = getattr(config, 'key_color', None) or "#cccccc"
+            text_color = getattr(config, 'text_color', None) or "#000000"
+            def _pick_color(attr: str, default_hex: str, btn: QPushButton):
+                q = QColor(default_hex)
+                color = QColorDialog.getColor(q, self, "选择颜色")
+                if color.isValid():
+                    hex_val = color.name()
+                    setattr(config, attr, hex_val)
+                    btn.setStyleSheet(f"background-color: {hex_val}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+                    self.config_changed.emit(self.current_config)
+            key_color_btn = QPushButton()
+            key_color_btn.setStyleSheet(f"background-color: {key_color}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+            key_color_btn.setCursor(Qt.PointingHandCursor)
+            key_color_btn.clicked.connect(lambda: _pick_color('key_color', key_color, key_color_btn))
+            self.geometry_layout.addRow(t("按键颜色:", "Key color:"), key_color_btn)
+            text_color_btn = QPushButton()
+            text_color_btn.setStyleSheet(f"background-color: {text_color}; border: 1px solid #666; min-width: 50px; min-height: 22px;")
+            text_color_btn.setCursor(Qt.PointingHandCursor)
+            text_color_btn.clicked.connect(lambda: _pick_color('text_color', text_color, text_color_btn))
+            self.geometry_layout.addRow(t("文字颜色:", "Text color:"), text_color_btn)
+        
         # 弧面设置（与单键参数面板一致，供弧面+文字贴合生成）
-        curved_enabled_check = QCheckBox("启用弧面")
+        curved_enabled_check = QCheckBox(t("启用弧面", "Enable curved surface"))
         curved_enabled_check.setChecked(getattr(geometry, 'curved_top_enabled', False))
         curved_enabled_check.stateChanged.connect(lambda v: self._on_geometry_changed('curved_top_enabled', v == Qt.Checked))
-        self.curved_layout.addRow("启用弧面:", curved_enabled_check)
+        self.curved_layout.addRow(t("启用弧面:", "Enable curved surface:"), curved_enabled_check)
         
         curved_x_row = QHBoxLayout()
-        curved_x_check = QCheckBox("X方向")
+        curved_x_check = QCheckBox(t("X方向", "X direction"))
         curved_x_check.setChecked(getattr(geometry, 'curved_top_x_enabled', False))
         curved_x_check.stateChanged.connect(lambda v: self._on_geometry_changed('curved_top_x_enabled', v == Qt.Checked))
         curved_x_row.addWidget(curved_x_check)
-        curved_x_row.addWidget(QLabel("半径:"))
+        curved_x_row.addWidget(QLabel(t("半径:", "Radius:")))
         curved_x_radius_spin = QDoubleSpinBox()
         curved_x_radius_spin.setRange(10.0, 1000.0)
         curved_x_radius_spin.setValue(getattr(geometry, 'curved_top_x_radius', 90.0))
@@ -236,14 +279,14 @@ class BatchEditPanel(QWidget):
         curved_x_radius_spin.setSuffix(" mm")
         curved_x_radius_spin.valueChanged.connect(lambda v: self._on_geometry_changed('curved_top_x_radius', v))
         curved_x_row.addWidget(curved_x_radius_spin)
-        self.curved_layout.addRow("X方向弧面:", curved_x_row)
+        self.curved_layout.addRow(t("X方向弧面:", "X direction curved surface:"), curved_x_row)
         
         curved_y_row = QHBoxLayout()
-        curved_y_check = QCheckBox("Y方向")
+        curved_y_check = QCheckBox(t("Y方向", "Y direction"))
         curved_y_check.setChecked(getattr(geometry, 'curved_top_y_enabled', False))
         curved_y_check.stateChanged.connect(lambda v: self._on_geometry_changed('curved_top_y_enabled', v == Qt.Checked))
         curved_y_row.addWidget(curved_y_check)
-        curved_y_row.addWidget(QLabel("半径:"))
+        curved_y_row.addWidget(QLabel(t("半径:", "Radius:")))
         curved_y_radius_spin = QDoubleSpinBox()
         curved_y_radius_spin.setRange(10.0, 1000.0)
         curved_y_radius_spin.setValue(getattr(geometry, 'curved_top_y_radius', 90.0))
@@ -251,17 +294,17 @@ class BatchEditPanel(QWidget):
         curved_y_radius_spin.setSuffix(" mm")
         curved_y_radius_spin.valueChanged.connect(lambda v: self._on_geometry_changed('curved_top_y_radius', v))
         curved_y_row.addWidget(curved_y_radius_spin)
-        self.curved_layout.addRow("Y方向弧面:", curved_y_row)
+        self.curved_layout.addRow(t("Y方向弧面:", "Y direction curved surface:"), curved_y_row)
         
         curved_direction_combo = QComboBox()
-        curved_direction_combo.addItems(["向上凸起", "向下凹陷"])
+        curved_direction_combo.addItems([t("向上凸起", "Convex up"), t("向下凹陷", "Concave down")])
         curved_direction_combo.setCurrentText(
-            "向下凹陷" if getattr(geometry, 'curved_top_direction', 'convex') == 'concave' else "向上凸起"
+            t("向下凹陷", "Concave down") if getattr(geometry, 'curved_top_direction', 'convex') == 'concave' else t("向上凸起", "Convex up")
         )
         curved_direction_combo.currentTextChanged.connect(
-            lambda t: self._on_geometry_changed('curved_top_direction', "concave" if t == "向下凹陷" else "convex")
+            lambda text: self._on_geometry_changed('curved_top_direction', "concave" if text == t("向下凹陷", "Concave down") else "convex")
         )
-        self.curved_layout.addRow("弧面方向:", curved_direction_combo)
+        self.curved_layout.addRow(t("弧面方向:", "Curved surface direction:"), curved_direction_combo)
     
     def _load_text_styles(self, key_type: KeyTypeSignature, config: BatchEditConfig):
         """加载字符样式控件"""
@@ -285,30 +328,34 @@ class BatchEditPanel(QWidget):
                 self._set_font_in_combo(font_combo, current_font_path)
             font_combo.currentIndexChanged.connect(lambda idx, p=pos_idx, combo=font_combo: self._update_style_font(p, combo))
             
-            browse_btn = QPushButton("浏览...")
+            browse_btn = QPushButton(t("浏览...", "Browse..."))
             browse_btn.clicked.connect(lambda checked=False, p=pos_idx, combo=font_combo: self._browse_font_for_position(p, combo))
             
             font_layout.addWidget(font_combo)
             font_layout.addWidget(browse_btn)
-            pos_layout.addRow("字体:", font_layout)
+            pos_layout.addRow(t("字体:", "Font:"), font_layout)
             
-            # 字体大小
+            # 字体大小（调节增量来自设置）
             size_spin = QDoubleSpinBox()
             size_spin.setRange(1.0, 20.0)
             size_spin.setValue(style.size)
             size_spin.setDecimals(1)
             size_spin.setSuffix(" mm")
+            if self.settings:
+                size_spin.setSingleStep(self.settings.get_text_height_step())
             size_spin.valueChanged.connect(lambda v, p=pos_idx: self._update_style_size(p, v))
-            pos_layout.addRow("大小:", size_spin)
+            pos_layout.addRow(t("大小:", "Size:"), size_spin)
             
-            # 深度
+            # 深度（调节增量来自设置）
             depth_spin = QDoubleSpinBox()
             depth_spin.setRange(-2.0, 2.0)
             depth_spin.setValue(style.depth)
             depth_spin.setDecimals(2)
             depth_spin.setSuffix(" mm")
+            if self.settings:
+                depth_spin.setSingleStep(self.settings.get_text_depth_step())
             depth_spin.valueChanged.connect(lambda v, p=pos_idx: self._update_style_depth(p, v))
-            pos_layout.addRow("深度:", depth_spin)
+            pos_layout.addRow(t("深度:", "Depth:"), depth_spin)
             
             # X偏移
             offset_x_spin = QDoubleSpinBox()
@@ -317,7 +364,7 @@ class BatchEditPanel(QWidget):
             offset_x_spin.setDecimals(2)
             offset_x_spin.setSuffix(" mm")
             offset_x_spin.valueChanged.connect(lambda v, p=pos_idx: self._update_style_offset_x(p, v))
-            pos_layout.addRow("X偏移:", offset_x_spin)
+            pos_layout.addRow(t("X偏移:", "X offset:"), offset_x_spin)
             
             # Y偏移
             offset_y_spin = QDoubleSpinBox()
@@ -326,35 +373,37 @@ class BatchEditPanel(QWidget):
             offset_y_spin.setDecimals(2)
             offset_y_spin.setSuffix(" mm")
             offset_y_spin.valueChanged.connect(lambda v, p=pos_idx: self._update_style_offset_y(p, v))
-            pos_layout.addRow("Y偏移:", offset_y_spin)
+            pos_layout.addRow(t("Y偏移:", "Y offset:"), offset_y_spin)
             
-            # 线宽（描边加粗，避免细线打印被跳过）
+            # 线宽（描边加粗，调节增量来自设置）
             stroke_width = getattr(style, 'stroke_width', 0.0)
             stroke_spin = QDoubleSpinBox()
             stroke_spin.setRange(0.0, 2.0)
             stroke_spin.setValue(stroke_width)
             stroke_spin.setDecimals(2)
             stroke_spin.setSuffix(" mm")
-            stroke_spin.setToolTip(">0 时向外加粗轮廓，避免细字体打印被切片软件跳过")
+            if self.settings:
+                stroke_spin.setSingleStep(self.settings.get_stroke_width_step())
+            stroke_spin.setToolTip(t(">0 时向外加粗轮廓，避免细字体打印被切片软件跳过", ">0 to thicken outline, prevents thin fonts from being skipped by slicer"))
             stroke_spin.valueChanged.connect(lambda v, p=pos_idx: self._update_style_stroke_width(p, v))
-            pos_layout.addRow("线宽:", stroke_spin)
+            pos_layout.addRow(t("线宽:", "Stroke width:"), stroke_spin)
             
             # 样式：加粗、斜体、下划线
             style_row = QHBoxLayout()
-            bold_check = QCheckBox("加粗")
+            bold_check = QCheckBox(t("加粗", "Bold"))
             bold_check.setChecked(getattr(style, 'bold', False))
             bold_check.stateChanged.connect(lambda v, p=pos_idx: self._update_style_bool(p, 'bold', v == Qt.Checked))
-            italic_check = QCheckBox("斜体")
+            italic_check = QCheckBox(t("斜体", "Italic"))
             italic_check.setChecked(getattr(style, 'italic', False))
             italic_check.stateChanged.connect(lambda v, p=pos_idx: self._update_style_bool(p, 'italic', v == Qt.Checked))
-            underline_check = QCheckBox("下划线")
+            underline_check = QCheckBox(t("下划线", "Underline"))
             underline_check.setChecked(getattr(style, 'underline', False))
             underline_check.stateChanged.connect(lambda v, p=pos_idx: self._update_style_bool(p, 'underline', v == Qt.Checked))
             style_row.addWidget(bold_check)
             style_row.addWidget(italic_check)
             style_row.addWidget(underline_check)
             style_row.addStretch()
-            pos_layout.addRow("样式:", style_row)
+            pos_layout.addRow(t("样式:", "Style:"), style_row)
             
             pos_group.setLayout(pos_layout)
             self.style_layout.addWidget(pos_group)
@@ -390,13 +439,21 @@ class BatchEditPanel(QWidget):
         combo.addItem(font_name, font_path)
         combo.setCurrentIndex(combo.count() - 1)
     
+    def retranslateUi(self):
+        """根据当前语言更新UI文案"""
+        self.type_label.setText(t("未选择类型", "No type selected"))
+        self.geometry_group.setTitle(t("几何参数（所有该类型按键共用）", "Geometry Parameters (shared by all keys of this type)"))
+        self.curved_group.setTitle(t("弧面设置", "Curved Surface Settings"))
+        self.style_group.setTitle(t("字符样式", "Character Styles"))
+        self.save_btn.setText(t("保存并应用到所有该类型按键", "Save and apply to all keys of this type"))
+    
     def _browse_font_for_position(self, pos_idx: int, combo: QComboBox):
         """为指定位置浏览字体文件"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            f"选择字体文件 (位置{pos_idx})",
+            t(f"选择字体文件 (位置{pos_idx})", f"Select Font File (Position {pos_idx})"),
             "",
-            "字体文件 (*.ttf *.otf *.ttc);;所有文件 (*.*)"
+            t("字体文件 (*.ttf *.otf *.ttc);;所有文件 (*.*)", "Font files (*.ttf *.otf *.ttc);;All files (*.*)")
         )
         
         if file_path:

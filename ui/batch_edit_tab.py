@@ -14,6 +14,7 @@ from core.batch_edit_config import BatchEditConfig
 from core.parameters import KeycapGeometry
 from core.legend_mapping import LegendMapping, LegendStyle, _calculate_base_position, get_top_surface_size
 from core.keycap_presets import u_to_mm
+from core.i18n import t
 from typing import Dict, List, Optional
 from core.kle_parser import KLEKey
 
@@ -24,15 +25,19 @@ class BatchEditTab(QWidget):
     # 信号：配置已保存并应用到所有匹配按键
     config_applied = pyqtSignal(dict)  # {类型标识: BatchEditConfig}
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
+        self.settings = settings
         self.kle_keys: List[KLEKey] = []
         self.type_map: Dict[str, List[int]] = {}
         self.configs: Dict[str, BatchEditConfig] = {}  # {类型标识: BatchEditConfig}
         self.current_type_id: Optional[str] = None
         self.default_geometry: Optional[KeycapGeometry] = None
         self.default_font_path: Optional[str] = None
+        self.save_btn = None
+        self.reset_btn = None
         self.setup_ui()
+        self.retranslateUi()
     
     def setup_ui(self):
         """左中右布局：左=类型树，中=参数，右=2D(40%)/3D(40%)/保存(10%)/恢复(10%)"""
@@ -49,7 +54,7 @@ class BatchEditTab(QWidget):
         center_widget = QWidget()
         center_layout = QVBoxLayout(center_widget)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        self.edit_panel = BatchEditPanel()
+        self.edit_panel = BatchEditPanel(settings=self.settings)
         self.edit_panel.set_show_save_button(False)
         self.edit_panel.config_saved.connect(self.on_config_saved)
         self.edit_panel.config_changed.connect(self.on_config_changed)
@@ -68,14 +73,14 @@ class BatchEditTab(QWidget):
         right_col.addWidget(self.preview_2d, stretch=4)
         self.preview_3d = PreviewWidget()
         right_col.addWidget(self.preview_3d, stretch=4)
-        save_btn = QPushButton("保存并应用")
-        save_btn.setStyleSheet("font-weight: bold; padding: 10px;")
-        save_btn.clicked.connect(self.edit_panel.save_and_apply)
-        right_col.addWidget(save_btn, stretch=1)
-        reset_btn = QPushButton("恢复到默认参数")
-        reset_btn.setStyleSheet("padding: 10px;")
-        reset_btn.clicked.connect(self._reset_current_to_default)
-        right_col.addWidget(reset_btn, stretch=1)
+        self.save_btn = QPushButton("")
+        self.save_btn.setStyleSheet("font-weight: bold; padding: 10px;")
+        self.save_btn.clicked.connect(self.edit_panel.save_and_apply)
+        right_col.addWidget(self.save_btn, stretch=1)
+        self.reset_btn = QPushButton("")
+        self.reset_btn.setStyleSheet("padding: 10px;")
+        self.reset_btn.clicked.connect(self._reset_current_to_default)
+        right_col.addWidget(self.reset_btn, stretch=1)
         right_wrap = QWidget()
         right_wrap.setLayout(right_col)
         layout.addWidget(right_wrap, stretch=1)
@@ -111,8 +116,8 @@ class BatchEditTab(QWidget):
         if not dg or not self.kle_keys:
             return None
         indices = self.type_map.get(type_id, [])
+        first_key = self.kle_keys[indices[0]] if indices else None
         if indices:
-            first_key = self.kle_keys[indices[0]]
             key_width_mm = u_to_mm(first_key.width)
             key_height_mm = u_to_mm(first_key.height)
         else:
@@ -157,7 +162,9 @@ class BatchEditTab(QWidget):
                 curved_top_x_radius=getattr(dg, 'curved_top_x_radius', 90.0),
                 curved_top_y_radius=getattr(dg, 'curved_top_y_radius', 90.0),
                 curved_top_direction=getattr(dg, 'curved_top_direction', 'convex')
-            )
+            ),
+            key_color=getattr(first_key, 'key_color', None) if first_key else None,
+            text_color=getattr(first_key, 'text_color', None) if first_key else None
         )
         for pos_idx in key_type.label_positions:
             style = legend_mapping.get_style(pos_idx, dfont)
@@ -349,22 +356,28 @@ class BatchEditTab(QWidget):
     
     def _apply_config_to_keys(self, type_id: str, config: BatchEditConfig):
         """
-        将配置应用到所有匹配该类型的按键
-        
-        注意：这里不直接修改KLEKey对象，而是将配置存储起来，
-        供生成3D模型时使用。KLEKey的labels等原始数据保持不变。
+        将配置应用到所有匹配该类型的按键。
+        几何/样式存于 configs，供生成 3D 使用；按键颜色写回 KLEKey（更新一次，不锁定）。
         """
         if type_id not in self.type_map:
             return
         
-        # 获取所有匹配该类型的按键索引
         key_indices = self.type_map[type_id]
+        for idx in key_indices:
+            if idx < len(self.kle_keys):
+                k = self.kle_keys[idx]
+                if config.key_color is not None:
+                    k.key_color = config.key_color
+                if config.text_color is not None:
+                    k.text_color = config.text_color
         
         print(f"应用配置到 {len(key_indices)} 个按键 (类型: {type_id})")
         print(f"  - 几何参数: 深度={config.geometry.key_depth:.1f}mm, "
               f"侧面斜角={config.geometry.side_angle:.1f}°, "
               f"圆角={config.geometry.corner_radius:.2f}mm")
         print(f"  - 字符样式位置数: {len(config.text_styles)}")
+        if config.key_color is not None or config.text_color is not None:
+            print(f"  - 颜色已写回: key_color={config.key_color}, text_color={config.text_color}")
     
     def get_configs(self) -> Dict[str, BatchEditConfig]:
         """获取所有配置（供外部访问）"""
@@ -386,3 +399,12 @@ class BatchEditTab(QWidget):
         
         # 返回对应的配置
         return self.configs.get(type_id)
+    
+    def retranslateUi(self):
+        """根据当前语言更新UI文案"""
+        if self.save_btn:
+            self.save_btn.setText(t("保存并应用", "Save and Apply"))
+        if self.reset_btn:
+            self.reset_btn.setText(t("恢复到默认参数", "Reset to Default Parameters"))
+        if hasattr(self, 'edit_panel'):
+            self.edit_panel.retranslateUi()

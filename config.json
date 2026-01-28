@@ -1,7 +1,7 @@
 {
   "snap_enabled": false,
   "snap_grid_size": 1.1,
-  "default_font_path": null,
+  "default_font_path": "C:\\WINDOWS\\Fonts\\STHUPO.TTF",
   "default_key_size": "1u",
   "default_height_profile": "Cherry高度",
   "default_row": "R3",
@@ -13,9 +13,20 @@
   "default_edge_profile_mode": "fillet",
   "default_edge_profile_radius": 0.0,
   "default_edge_profile_outer": true,
-  "default_edge_profile_inner": false,
+  "default_edge_profile_inner": true,
   "default_edge_profile_left": true,
   "default_edge_profile_right": true,
   "default_edge_profile_top": true,
-  "default_edge_profile_bottom": true
+  "default_edge_profile_bottom": true,
+  "default_stroke_width": 0.0,
+  "stroke_width_step": 0.05,
+  "default_wall_thickness": 1.0,
+  "wall_thickness_step": 0.1,
+  "side_angle_step": 1.0,
+  "edge_radius_step": 0.05,
+  "default_text_height": 3.0,
+  "text_height_step": 0.1,
+  "default_text_depth": 0.5,
+  "text_depth_step": 0.05,
+  "language": "en"
 }

@@ -159,6 +159,56 @@ class BatchEditPreview2D(QWidget):
         
         return QRectF(top_left_x, top_left_y, text_w, text_h)
     
+    def apply_preset_position(self, position_name: str):
+        """应用预设位置（与单键 2D 预览相同的九宫格，便于在键盘参数界面使用对齐菜单）"""
+        if self.selected_index < 0 or self.selected_index >= len(self.text_items):
+            return
+        if not self.key_type or not self.config:
+            return
+        kw = u_to_mm(self.key_type.width)
+        kh = u_to_mm(self.key_type.height)
+        positions = {
+            "左上": (-kw * 0.3, -kh * 0.3),
+            "中上": (0, -kh * 0.3),
+            "右上": (kw * 0.3, -kh * 0.3),
+            "左中": (-kw * 0.3, 0),
+            "中间": (0, 0),
+            "右中": (kw * 0.3, 0),
+            "左下": (-kw * 0.3, kh * 0.3),
+            "中下": (0, kh * 0.3),
+            "右下": (kw * 0.3, kh * 0.3),
+        }
+        if position_name not in positions:
+            return
+        target_x, target_y = positions[position_name]
+        item = self.text_items[self.selected_index]
+        item.x = target_x
+        item.y = target_y
+        pos_idx = item.pos_idx
+        g = self.config.geometry
+        top_w, top_h = get_top_surface_size(
+            kw, kh,
+            g.key_depth,
+            getattr(g, 'side_angle', 0.0) or 0.0
+        )
+        base_x, base_y = _calculate_base_position(
+            pos_idx, kw, kh,
+            top_width=top_w, top_height=top_h
+        )
+        new_offset_x = target_x - base_x
+        new_offset_y = target_y - base_y
+        if pos_idx in self.config.text_styles:
+            self.config.text_styles[pos_idx].offset_x = new_offset_x
+            self.config.text_styles[pos_idx].offset_y = new_offset_y
+        else:
+            from core.legend_mapping import LegendStyle
+            self.config.text_styles[pos_idx] = LegendStyle(
+                offset_x=new_offset_x,
+                offset_y=new_offset_y
+            )
+        self.position_changed.emit(pos_idx, new_offset_x, new_offset_y)
+        self.update()
+    
     def paintEvent(self, event):
         """绘制事件（与Preview2DWidget一致）"""
         if self.key_type is None or self.config is None:

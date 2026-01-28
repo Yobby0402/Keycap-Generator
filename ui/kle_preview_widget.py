@@ -2,7 +2,7 @@
 KLE 布局 2D 预览控件
 """
 from PyQt5.QtWidgets import QWidget, QToolTip
-from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt5.QtCore import Qt, pyqtSignal, QRectF, QPointF, QPoint
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QPalette
 from typing import List, Optional
 from core.kle_parser import KLEKey
@@ -11,15 +11,20 @@ from core.legend_mapping import KLE_POSITION_NAMES
 class KLEPreviewWidget(QWidget):
     """KLE 布局 2D 预览控件"""
     
-    # 信号：选中按键索引（单击）
+    # 信号：选中按键索引（单击，兼容旧逻辑）
     key_selected = pyqtSignal(int)
+    # 信号：选中变化（支持多选，list 为当前选中的索引）
+    key_selection_changed = pyqtSignal(list)
     # 信号：双击按键索引（打开编辑对话框）
     key_double_clicked = pyqtSignal(int)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.keys: List[KLEKey] = []
-        self.selected_index: int = -1
+        self.selected_index: int = -1  # 主选中（多选时取第一个）
+        self.selected_indices: List[int] = []  # 多选列表，支持框选、Ctrl+点击
+        self._drag_start: Optional[QPointF] = None  # 框选起点（像素）
+        self._drag_current: Optional[QPointF] = None  # 框选当前点（用于绘制橡皮筋）
         self.scale_factor: float = 40.0 # 1u = 40px
         self.margin: float = 20.0
         # 初始间距设为0（u单位），等待set_spacing设置正确的值
@@ -39,6 +44,9 @@ class KLEPreviewWidget(QWidget):
         """设置数据"""
         self.keys = keys
         self.selected_index = -1
+        self.selected_indices = []
+        self._drag_start = None
+        self._drag_current = None
         self._calculate_scale()
         self.update()
         
@@ -53,59 +61,28 @@ class KLEPreviewWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "请在左侧导入 KLE 数据")
             return
 
-        # 计算自动缩放
+        # 计算自动缩放（使用 KLE 解析出的 key.x/key.y，保留布局中的间隔）
         self._calculate_scale()
         
         # 移动坐标系到中心或边距
         painter.translate(self.margin, self.margin)
         painter.scale(self.scale_factor, self.scale_factor)
         
-        # 按行分组按键（应用间距）
-        rows = {}
-        for key in self.keys:
-            row_y = key.y
-            if row_y not in rows:
-                rows[row_y] = []
-            rows[row_y].append(key)
+        # 按 key.x, key.y 直接绘制（保留数字区与字母区等布局间隔）
+        for key_index, key in enumerate(self.keys):
+            self._draw_key(painter, key_index, key)
         
-        sorted_rows = sorted(rows.keys())
-        
-        # Y轴向下（Qt屏幕坐标系），从顶部开始；显示位置由 _calculate_scale 统一维护
-        current_y = 0.0  # 第一行从Y=0开始（顶部）
-        max_row_height = 0.0
-        
-        for row_idx, row_y in enumerate(sorted_rows):
-            row_keys = sorted(rows[row_y], key=lambda k: k.x)
-            current_x = 0.0  # 每行从x=0开始
-            
-            for key in row_keys:
-                key_x = current_x
-                key_y = current_y  # 按键顶部位置
-                key_index = self.keys.index(key) if key in self.keys else -1
-                if key_index >= 0:
-                    # 创建临时按键对象用于绘制（避免修改原始数据）
-                    temp_key = KLEKey(
-                        x=key_x, y=key_y,
-                        width=key.width, height=key.height,
-                        rotation_angle=key.rotation_angle,
-                        rotation_x=key.rotation_x, rotation_y=key.rotation_y,
-                        labels=key.labels.copy(),
-                        text_color=key.text_color,
-                        key_color=key.key_color,
-                        font_sizes=key.font_sizes.copy() if key.font_sizes else [],
-                        alignment=key.alignment,
-                        profile=key.profile,
-                        row=key.row
-                    )
-                    self._draw_key(painter, key_index, temp_key)
-                
-                # 更新下一个按键的x位置（2D 使用固定 0 间距）
-                current_x += key.width + self._preview_col_spacing
-                max_row_height = max(max_row_height, key.height)
-            
-            # 换行：更新y位置（2D 使用固定 0 间距）
-            current_y += max_row_height + self._preview_row_spacing
-            max_row_height = 0.0
+        # 框选橡皮筋：在窗口坐标系下绘制选择矩形
+        if self._drag_start is not None and self._drag_current is not None:
+            painter.save()
+            painter.resetTransform()
+            x1, x2 = self._drag_start.x(), self._drag_current.x()
+            y1, y2 = self._drag_start.y(), self._drag_current.y()
+            r = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            painter.setPen(QPen(QColor("#0066cc"), 2, Qt.DashLine))
+            painter.setBrush(QBrush(QColor(0, 102, 204, 40)))
+            painter.drawRect(r)
+            painter.restore()
             
     def _draw_key(self, painter: QPainter, index: int, key: KLEKey):
         """绘制单个按键"""
@@ -124,8 +101,8 @@ class KLEPreviewWidget(QWidget):
         # 绘制矩形
         rect = QRectF(0, 0, key.width, key.height)
         
-        # 颜色
-        if index == self.selected_index:
+        # 颜色（多选时任意选中即高亮）
+        if index in self.selected_indices:
             fill_color = QColor("#aaddff")
             border_color = QColor("#0066cc")
             border_width = 0.1
@@ -252,54 +229,20 @@ class KLEPreviewWidget(QWidget):
             painter.restore()
 
     def _calculate_scale(self):
-        """计算适应窗口的缩放比例（考虑间距）"""
+        """计算适应窗口的缩放比例；使用 KLE 的 key.x/key.y 作为显示位置，保留布局间隔"""
         if not self.keys:
             return
         
-        # 按行分组按键并计算应用间距后的边界框
-        rows = {}
-        for key in self.keys:
-            row_y = key.y
-            if row_y not in rows:
-                rows[row_y] = []
-            rows[row_y].append(key)
-        
-        sorted_rows = sorted(rows.keys())
-        
-        # Y轴向下（Qt屏幕坐标系），从顶部开始（与绘制逻辑一致）
-        current_y = 0.0  # 第一行从Y=0开始
-        max_row_height = 0.0
-        min_x = 0.0
-        max_x = 0.0
-        min_y = 0.0
-        max_y = 0.0
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
         self.key_display_positions = {}
         
-        for row_idx, row_y in enumerate(sorted_rows):
-            row_keys = sorted(rows[row_y], key=lambda k: k.x)
-            current_x = 0.0
-            
-            for key in row_keys:
-                # 计算按键显示位置
-                key_x = current_x
-                key_y = current_y  # 按键顶部位置
-                key_index = self.keys.index(key) if key in self.keys else -1
-                if key_index >= 0:
-                    self.key_display_positions[key_index] = (key_x, key_y)
-                
-                # 更新边界框
-                min_x = min(min_x, key_x)
-                max_x = max(max_x, key_x + key.width)
-                min_y = min(min_y, key_y)
-                max_y = max(max_y, key_y + key.height)
-                
-                # 更新下一个按键的x位置（2D 固定 0 间距）
-                current_x += key.width + self._preview_col_spacing
-                max_row_height = max(max_row_height, key.height)
-            
-            # 换行（2D 固定 0 间距）
-            current_y += max_row_height + self._preview_row_spacing
-            max_row_height = 0.0
+        for i, key in enumerate(self.keys):
+            self.key_display_positions[i] = (key.x, key.y)
+            min_x = min(min_x, key.x)
+            max_x = max(max_x, key.x + key.width)
+            min_y = min(min_y, key.y)
+            max_y = max(max_y, key.y + key.height)
         
         content_w = max_x - min_x
         content_h = max_y - min_y
@@ -307,14 +250,11 @@ class KLEPreviewWidget(QWidget):
         if content_w <= 0 or content_h <= 0:
             return
             
-        # 窗口尺寸
         view_w = self.width() - 2 * self.margin
         view_h = self.height() - 2 * self.margin
         
-        # 计算比例
         scale_x = view_w / content_w
         scale_y = view_h / content_h
-        
         self.scale_factor = min(scale_x, scale_y)
     
     def _key_index_at(self, u_x: float, u_y: float) -> int:
@@ -327,44 +267,95 @@ class KLEPreviewWidget(QWidget):
                     return i
         return -1
     
+    def _key_indices_in_rect(self, top_left: QPointF, bottom_right: QPointF) -> List[int]:
+        """屏幕坐标系下矩形范围内的按键索引列表（用于框选）。"""
+        self._calculate_scale()
+        mx, my = self.margin, self.margin
+        u_x1 = (min(top_left.x(), bottom_right.x()) - mx) / self.scale_factor
+        u_y1 = (min(top_left.y(), bottom_right.y()) - my) / self.scale_factor
+        u_x2 = (max(top_left.x(), bottom_right.x()) - mx) / self.scale_factor
+        u_y2 = (max(top_left.y(), bottom_right.y()) - my) / self.scale_factor
+        out = []
+        for i, key in enumerate(self.keys):
+            if i not in self.key_display_positions:
+                continue
+            dx, dy = self.key_display_positions[i]
+            # 按键矩形与选择矩形有交即选中
+            if u_x2 >= dx and u_x1 <= dx + key.width and u_y2 >= dy and u_y1 <= dy + key.height:
+                out.append(i)
+        return out
+    
+    def _emit_selection(self):
+        """同步 selected_index 并发出选中变化信号。"""
+        self.selected_index = self.selected_indices[0] if self.selected_indices else -1
+        self.key_selection_changed.emit(list(self.selected_indices))
+        self.key_selected.emit(self.selected_index)
+    
     def mouseMoveEvent(self, event):
-        """悬停时显示气泡，放大显示该按键上的字符。"""
-        mx = event.pos().x() - self.margin
-        my = event.pos().y() - self.margin
-        u_x = mx / self.scale_factor
-        u_y = my / self.scale_factor
-        idx = self._key_index_at(u_x, u_y)
-        if idx >= 0 and idx < len(self.keys):
-            key = self.keys[idx]
-            parts = []
-            for pos_idx, label in enumerate(key.labels or []):
-                if label and str(label).strip():
-                    pos_name = KLE_POSITION_NAMES.get(pos_idx, f"位置{pos_idx}")
-                    parts.append(f"{pos_name}: {label.strip()}")
-            if parts:
-                tip = "\n".join(parts)
-                g = self.mapToGlobal(event.pos())
-                QToolTip.showText(g, tip, self, self.rect(), 2000)
+        """悬停时显示气泡；拖动时更新橡皮筋"""
+        if self._drag_start is not None:
+            self._drag_current = QPointF(event.pos())
+            self.update()
+        else:
+            mx = event.pos().x() - self.margin
+            my = event.pos().y() - self.margin
+            u_x = mx / self.scale_factor
+            u_y = my / self.scale_factor
+            idx = self._key_index_at(u_x, u_y)
+            if idx >= 0 and idx < len(self.keys):
+                key = self.keys[idx]
+                parts = []
+                for pos_idx, label in enumerate(key.labels or []):
+                    if label and str(label).strip():
+                        pos_name = KLE_POSITION_NAMES.get(pos_idx, f"位置{pos_idx}")
+                        parts.append(f"{pos_name}: {label.strip()}")
+                if parts:
+                    tip = "\n".join(parts)
+                    g = self.mapToGlobal(event.pos())
+                    QToolTip.showText(g, tip, self, self.rect(), 2000)
+                else:
+                    QToolTip.hideText()
             else:
                 QToolTip.hideText()
-        else:
-            QToolTip.hideText()
         super().mouseMoveEvent(event)
     
     def mousePressEvent(self, event):
-        """处理点击选中"""
+        """处理点击选中、Ctrl+多选、框选起点"""
+        if event.button() != Qt.LeftButton:
+            return
+        self._drag_start = QPointF(event.pos())
         mx = event.pos().x() - self.margin
         my = event.pos().y() - self.margin
         u_x = mx / self.scale_factor
         u_y = my / self.scale_factor
         found = self._key_index_at(u_x, u_y)
         if found != -1:
-            self.selected_index = found
-            self.key_selected.emit(found)
-            self.update()
+            if event.modifiers() & Qt.ControlModifier:
+                if found in self.selected_indices:
+                    self.selected_indices = [i for i in self.selected_indices if i != found]
+                else:
+                    self.selected_indices = list(self.selected_indices) + [found]
+            else:
+                self.selected_indices = [found]
         else:
-            self.selected_index = -1
+            if not (event.modifiers() & Qt.ControlModifier):
+                self.selected_indices = []
+        self._emit_selection()
+        self.update()
+    
+    def mouseReleaseEvent(self, event):
+        """框选结束：若拖动距离足够则按矩形范围更新多选，并清除橡皮筋"""
+        if event.button() == Qt.LeftButton and self._drag_start is not None:
+            p1, p2 = self._drag_start, QPointF(event.pos())
+            if abs(p2.x() - p1.x()) > 6 or abs(p2.y() - p1.y()) > 6:
+                indices = self._key_indices_in_rect(p1, p2)
+                if indices:
+                    self.selected_indices = indices
+                    self._emit_selection()
+            self._drag_start = None
+            self._drag_current = None
             self.update()
+        super().mouseReleaseEvent(event)
     
     def mouseDoubleClickEvent(self, event):
         """处理双击事件 - 打开编辑对话框"""
