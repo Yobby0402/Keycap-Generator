@@ -317,57 +317,70 @@ class KeycapShape:
         ry = getattr(self.params.geometry, 'curved_top_y_radius', 90.0)
         is_convex = getattr(self.params.geometry, 'curved_top_direction', 'convex') == 'convex'
         
+        # 考虑圆角的影响
+        corner_radius = self.params.corner_radius
+        edge_radius = getattr(self.params.geometry, 'edge_profile_radius', 0.0)
+        edge_outer = getattr(self.params.geometry, 'edge_profile_outer', True)
+        actual_radius = max(corner_radius, edge_radius if edge_outer else 0.0)
+        safety_margin = 0.2  # 使用更大的安全边距
+        if actual_radius > 0:
+            effective_w = max(0.1, tw - 2 * actual_radius - safety_margin)
+            effective_h = max(0.1, th - 2 * actual_radius - safety_margin)
+        else:
+            effective_w = tw
+            effective_h = th
+        
         if not enabled or (not cx and not cy):
             return None, False
-        if cx and 2 * rx < tw:
+        if cx and 2 * rx < effective_w:
             return None, False
-        if cy and 2 * ry < th:
+        if cy and 2 * ry < effective_h:
             return None, False
         
         try:
             if cx and cy:
-                chx, chy = tw / 2, th / 2
+                chx, chy = effective_w / 2, effective_h / 2  # 使用有效尺寸
                 hx = sqrt(rx * rx - chx * chx)
                 hy = sqrt(ry * ry - chy * chy)
                 ax, ay = rx - hx, ry - hy
                 total_h = ax + ay
                 if is_convex:
                     cx_z, cy_z = tt - hx, tt - hy
-                    cyl_x = (cq.Workplane("XZ").workplane(offset=0).center(0, cx_z).circle(rx).extrude(th * 2, both=True))
-                    cyl_y = (cq.Workplane("YZ").workplane(offset=0).center(0, cy_z).circle(ry).extrude(tw * 2, both=True))
+                    cyl_x = (cq.Workplane("XZ").workplane(offset=0).center(0, cx_z).circle(rx).extrude(effective_h * 2, both=True))
+                    cyl_y = (cq.Workplane("YZ").workplane(offset=0).center(0, cy_z).circle(ry).extrude(effective_w * 2, both=True))
                     body = cyl_x.intersect(cyl_y)
-                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(total_h + 0.5))
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(effective_w, effective_h).extrude(total_h + 0.5))
                 else:
                     cx_z, cy_z = tt + hx, tt + hy
-                    ext = max(tw, th) * 2
+                    ext = max(effective_w, effective_h) * 2
                     cyl_x = (cq.Workplane("XZ").workplane(offset=0).center(0, cx_z).circle(rx).extrude(ext, both=True))
                     cyl_y = (cq.Workplane("YZ").workplane(offset=0).center(0, cy_z).circle(ry).extrude(ext, both=True))
                     body = cyl_x.intersect(cyl_y)
-                    box = (cq.Workplane("XY").workplane(offset=tt - total_h - 0.5).rect(ext, ext).extrude(total_h + 0.5))
+                    box = (cq.Workplane("XY").workplane(offset=tt - total_h - 0.5).rect(effective_w, effective_h).extrude(total_h + 0.5))
                 part = body.intersect(box)
             elif cx:
-                ch = tw / 2
+                ch = effective_w / 2  # 使用有效宽度
                 h = sqrt(rx * rx - ch * ch)
                 ah = rx - h
                 cz = tt - h if is_convex else tt + h
-                ext = max(th, tw) * 2 if not is_convex else th
+                ext = max(effective_h, effective_w) * 2 if not is_convex else effective_h
                 cyl = (cq.Workplane("XZ").workplane(offset=0).center(0, cz).circle(rx).extrude(ext, both=True))
                 if is_convex:
-                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(ah + 0.1))
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(effective_w, effective_h).extrude(ah + 0.1))
                 else:
-                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(tw, ext).extrude(ah + 0.2))
+                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(effective_w, ext).extrude(ah + 0.2))
                 part = cyl.intersect(box)
             else:
-                ch = th / 2
+                ch = effective_h / 2  # 使用有效高度
                 h = sqrt(ry * ry - ch * ch)
                 ah = ry - h
                 cz = tt - h if is_convex else tt + h
-                ext = max(tw, th) * 2 if not is_convex else tw
+                ext = max(effective_w, effective_h) * 2 if not is_convex else effective_w
                 cyl = (cq.Workplane("YZ").workplane(offset=0).center(0, cz).circle(ry).extrude(ext, both=True))
                 if is_convex:
-                    box = (cq.Workplane("XY").workplane(offset=tt).rect(tw, th).extrude(ah + 0.1))
+                    box = (cq.Workplane("XY").workplane(offset=tt).rect(effective_w, effective_h).extrude(ah + 0.1))
                 else:
-                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(ext, th).extrude(ah + 0.2))
+                    box = (cq.Workplane("XY").workplane(offset=tt - ah - 0.1).rect(ext, effective_h).extrude(ah + 0.2))
                 part = cyl.intersect(box)
             
             return part, is_convex
@@ -427,27 +440,57 @@ class KeycapShape:
         is_convex = (curved_direction == "convex")
         print(f"【弧面处理】方向: {'凸起' if is_convex else '凹陷'}")
         
-        # 验证圆弧直径是否满足要求
-        if curved_x and 2 * curved_x_radius < top_w:
-            print(f"【弧面处理】警告：X方向圆弧直径({2*curved_x_radius:.2f}mm) < 顶面宽度({top_w:.2f}mm)，跳过弧面")
+        # 获取圆角半径和边缘形状半径（如果已应用，需要调整弧面的有效区域）
+        corner_radius = self.params.corner_radius
+        edge_radius = getattr(self.params.geometry, 'edge_profile_radius', 0.0)
+        edge_outer = getattr(self.params.geometry, 'edge_profile_outer', True)
+        
+        # 计算实际影响顶面的圆角半径
+        # corner_radius 是顶面的圆角半径（如果应用）
+        # edge_profile_radius 是边缘形状的半径（如果应用到外侧边缘，也会影响顶面）
+        # 取两者中较大的值，因为它们都会"吃掉"顶面边缘区域
+        actual_radius = max(corner_radius, edge_radius if edge_outer else 0.0)
+        
+        # 计算有效区域（考虑圆角的影响）
+        # 圆角会"吃掉"边缘区域，实际可用区域会变小
+        # 有效区域 = 原始尺寸 - 2 * 圆角半径（每个方向减去两个圆角）
+        # 增加安全边距，确保弧面不会超出圆角后的实际顶面
+        # 使用更大的安全边距（0.2mm），因为圆角不仅减少尺寸，还改变了形状（从矩形变成圆角矩形）
+        safety_margin = 0.2  # 安全边距，考虑圆角形状变化的影响
+        if actual_radius > 0:
+            # 更保守的计算：圆角矩形内接矩形的尺寸
+            # 对于圆角矩形，内接矩形 = 外矩形 - 2 * 圆角半径
+            # 但考虑到圆角形状的影响，再减去一个安全边距
+            effective_w = max(0.1, top_w - 2 * actual_radius - safety_margin)
+            effective_h = max(0.1, top_h - 2 * actual_radius - safety_margin)
+        else:
+            effective_w = top_w
+            effective_h = top_h
+        
+        print(f"【弧面处理】圆角影响：corner_radius={corner_radius:.2f}mm, edge_radius={edge_radius:.2f}mm, edge_outer={edge_outer}, 实际半径={actual_radius:.2f}mm")
+        print(f"【弧面处理】有效区域：原始={top_w:.2f}x{top_h:.2f}mm -> 有效={effective_w:.2f}x{effective_h:.2f}mm")
+        
+        if curved_x and 2 * curved_x_radius < effective_w:
+            print(f"【弧面处理】警告：X方向圆弧直径({2*curved_x_radius:.2f}mm) < 有效宽度({effective_w:.2f}mm，考虑圆角{corner_radius:.2f}mm)，跳过弧面")
             return keycap
-        if curved_y and 2 * curved_y_radius < top_h:
-            print(f"【弧面处理】警告：Y方向圆弧直径({2*curved_y_radius:.2f}mm) < 顶面高度({top_h:.2f}mm)，跳过弧面")
+        if curved_y and 2 * curved_y_radius < effective_h:
+            print(f"【弧面处理】警告：Y方向圆弧直径({2*curved_y_radius:.2f}mm) < 有效高度({effective_h:.2f}mm，考虑圆角{corner_radius:.2f}mm)，跳过弧面")
             return keycap
         
         try:
+            # 传递实际圆角半径给弧面计算方法，使其考虑圆角对有效区域的影响
             if curved_x and curved_y:
                 # 双方向弧面
                 keycap = self._apply_double_curved(keycap, top_w, top_h, top_thickness,
-                                                   curved_x_radius, curved_y_radius, is_convex)
+                                                   curved_x_radius, curved_y_radius, is_convex, actual_radius)
             elif curved_x:
                 # X方向弧面
                 keycap = self._apply_x_curved(keycap, top_w, top_h, top_thickness,
-                                             curved_x_radius, is_convex)
+                                             curved_x_radius, is_convex, actual_radius)
             elif curved_y:
                 # Y方向弧面
                 keycap = self._apply_y_curved(keycap, top_w, top_h, top_thickness,
-                                             curved_y_radius, is_convex)
+                                             curved_y_radius, is_convex, actual_radius)
             
             print("【弧面处理】完成")
         except Exception as e:
@@ -458,20 +501,35 @@ class KeycapShape:
         return keycap
     
     def _apply_x_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
-                        top_thickness: float, radius: float, is_convex: bool) -> cq.Workplane:
+                        top_thickness: float, radius: float, is_convex: bool, corner_radius: float = 0.0) -> cq.Workplane:
         """
         应用X方向弧面
         创建一个圆柱形弧面体，然后通过布尔运算添加或删除
+        
+        参数:
+            corner_radius: 圆角半径，用于调整弧面的有效区域
         """
         try:
-            # 计算弧面参数
-            chord_half = top_w / 2  # 弦长的一半
+            # 考虑圆角的影响：圆角会"吃掉"边缘区域，实际可用区域会变小
+            # 但弧面的弦长应该基于有效区域（减去圆角影响），这样弧面才能与圆角后的顶面完美贴合
+            # 增加安全边距，确保弧面不会超出圆角后的实际顶面
+            # 使用更大的安全边距（0.2mm），因为圆角不仅减少尺寸，还改变了形状
+            safety_margin = 0.2
+            if corner_radius > 0:
+                effective_w = max(0.1, top_w - 2 * corner_radius - safety_margin)
+                effective_h = max(0.1, top_h - 2 * corner_radius - safety_margin)
+            else:
+                effective_w = top_w
+                effective_h = top_h
+            
+            # 计算弧面参数（基于有效宽度）
+            chord_half = effective_w / 2  # 弦长的一半（考虑圆角）
             h = sqrt(radius * radius - chord_half * chord_half)  # 弦到圆心的距离
             
             # 弧高 = 圆心到弧的最高点距离 - 弦到圆心的距离
             arc_height = radius - h
             
-            print(f"【X方向弧面】半径={radius:.2f}mm, 弦长={top_w:.2f}mm, 弧高={arc_height:.2f}mm")
+            print(f"【X方向弧面】半径={radius:.2f}mm, 原始宽度={top_w:.2f}mm, 有效宽度={effective_w:.2f}mm（圆角={corner_radius:.2f}mm）, 弦长={effective_w:.2f}mm, 弧高={arc_height:.2f}mm")
             
             # 创建圆柱体（在XZ平面，沿Y方向拉伸）
             # 圆柱中心位置：
@@ -488,13 +546,13 @@ class KeycapShape:
                            .workplane(offset=0)  # Y=0
                            .center(0, cylinder_center_z)  # 圆心在(X=0, Z=cylinder_center_z)
                            .circle(radius)
-                           .extrude(top_h, both=True))  # 沿Y方向拉伸
+                           .extrude(effective_h, both=True))  # 沿Y方向拉伸（使用有效高度）
                 
-                # 创建裁剪盒：只保留顶面范围内的部分
-                # 范围：X从-top_w/2到top_w/2，Y从-top_h/2到top_h/2，Z从top_thickness到top_thickness+arc_height
+                # 创建裁剪盒：只保留有效区域内的部分（考虑圆角）
+                # 范围：X从-effective_w/2到effective_w/2，Y从-effective_h/2到effective_h/2，Z从top_thickness到top_thickness+arc_height
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness)
-                           .rect(top_w, top_h)
+                           .rect(effective_w, effective_h)  # 使用有效尺寸
                            .extrude(arc_height + 0.1))
                 
                 # 取圆柱与裁剪盒的交集
@@ -502,7 +560,7 @@ class KeycapShape:
                 
                 # 将弧面部分添加到键帽上
                 keycap = keycap.union(curved_part)
-                print(f"【X方向弧面】凸起弧面已添加")
+                print(f"【X方向弧面】凸起弧面已添加（已考虑圆角影响）")
                 
             else:
                 # 凹陷：创建圆柱体，然后从键帽中减去
@@ -511,17 +569,17 @@ class KeycapShape:
                 
                 # 创建圆柱体（沿Y轴方向）
                 # 拉伸长度需要足够大以穿透侧面
-                extrude_length = max(top_h, top_w) * 2
+                extrude_length = max(effective_h, effective_w) * 2
                 cylinder = (cq.Workplane("XZ")
                            .workplane(offset=0)
                            .center(0, cylinder_center_z)
                            .circle(radius)
                            .extrude(extrude_length, both=True))
                 
-                # 创建裁剪盒：X方向限制在顶面宽度内，Y方向足够大以穿透侧面
+                # 创建裁剪盒：X方向限制在有效宽度内（考虑圆角），Y方向足够大以穿透侧面
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness - arc_height - 0.1)
-                           .rect(top_w, extrude_length)
+                           .rect(effective_w, extrude_length)  # 使用有效宽度
                            .extrude(arc_height + 0.2))
                 
                 # 取圆柱与裁剪盒的交集
@@ -529,7 +587,7 @@ class KeycapShape:
                 
                 # 从键帽中减去弧面部分
                 keycap = keycap.cut(curved_part)
-                print(f"【X方向弧面】凹陷弧面已减去")
+                print(f"【X方向弧面】凹陷弧面已减去（已考虑圆角影响）")
             
             return keycap
             
@@ -540,20 +598,34 @@ class KeycapShape:
             return keycap
     
     def _apply_y_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
-                        top_thickness: float, radius: float, is_convex: bool) -> cq.Workplane:
+                        top_thickness: float, radius: float, is_convex: bool, corner_radius: float = 0.0) -> cq.Workplane:
         """
         应用Y方向弧面
         创建一个圆柱形弧面体，然后通过布尔运算添加或删除
+        
+        参数:
+            corner_radius: 圆角半径，用于调整弧面的有效区域
         """
         try:
-            # 计算弧面参数
-            chord_half = top_h / 2  # 弦长的一半
+            # 考虑圆角的影响：圆角会"吃掉"边缘区域，实际可用区域会变小
+            # 增加安全边距，确保弧面不会超出圆角后的实际顶面
+            # 使用更大的安全边距（0.2mm），因为圆角不仅减少尺寸，还改变了形状
+            safety_margin = 0.2
+            if corner_radius > 0:
+                effective_w = max(0.1, top_w - 2 * corner_radius - safety_margin)
+                effective_h = max(0.1, top_h - 2 * corner_radius - safety_margin)
+            else:
+                effective_w = top_w
+                effective_h = top_h
+            
+            # 计算弧面参数（基于有效高度）
+            chord_half = effective_h / 2  # 弦长的一半（考虑圆角）
             h = sqrt(radius * radius - chord_half * chord_half)  # 弦到圆心的距离
             
             # 弧高 = 圆心到弧的最高点距离 - 弦到圆心的距离
             arc_height = radius - h
             
-            print(f"【Y方向弧面】半径={radius:.2f}mm, 弦长={top_h:.2f}mm, 弧高={arc_height:.2f}mm")
+            print(f"【Y方向弧面】半径={radius:.2f}mm, 原始高度={top_h:.2f}mm, 有效高度={effective_h:.2f}mm（圆角={corner_radius:.2f}mm）, 弦长={effective_h:.2f}mm, 弧高={arc_height:.2f}mm")
             
             if is_convex:
                 # 凸起：圆柱中心在 Z = top_thickness - h
@@ -564,40 +636,40 @@ class KeycapShape:
                            .workplane(offset=0)  # X=0
                            .center(0, cylinder_center_z)  # 圆心在(Y=0, Z=cylinder_center_z)
                            .circle(radius)
-                           .extrude(top_w, both=True))  # 沿X方向拉伸
+                           .extrude(effective_w, both=True))  # 沿X方向拉伸（使用有效宽度）
                 
-                # 创建裁剪盒
+                # 创建裁剪盒（使用有效尺寸）
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness)
-                           .rect(top_w, top_h)
+                           .rect(effective_w, effective_h)  # 使用有效尺寸
                            .extrude(arc_height + 0.1))
                 
                 # 取交集并添加到键帽
                 curved_part = cylinder.intersect(clip_box)
                 keycap = keycap.union(curved_part)
-                print(f"【Y方向弧面】凸起弧面已添加")
-                
+                print(f"【Y方向弧面】凸起弧面已添加（已考虑圆角影响）")
+            
             else:
                 # 凹陷：圆柱中心在 Z = top_thickness + h
                 cylinder_center_z = top_thickness + h
                 
                 # 拉伸长度需要足够大以穿透侧面
-                extrude_length = max(top_w, top_h) * 2
+                extrude_length = max(effective_w, effective_h) * 2
                 cylinder = (cq.Workplane("YZ")
                            .workplane(offset=0)
                            .center(0, cylinder_center_z)
                            .circle(radius)
                            .extrude(extrude_length, both=True))
                 
-                # 创建裁剪盒：Y方向限制在顶面高度内，X方向足够大以穿透侧面
+                # 创建裁剪盒：Y方向限制在有效高度内（考虑圆角），X方向足够大以穿透侧面
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness - arc_height - 0.1)
-                           .rect(extrude_length, top_h)
+                           .rect(extrude_length, effective_h)  # 使用有效高度
                            .extrude(arc_height + 0.2))
                 
                 curved_part = cylinder.intersect(clip_box)
                 keycap = keycap.cut(curved_part)
-                print(f"【Y方向弧面】凹陷弧面已减去")
+                print(f"【Y方向弧面】凹陷弧面已减去（已考虑圆角影响）")
             
             return keycap
             
@@ -609,25 +681,39 @@ class KeycapShape:
     
     def _apply_double_curved(self, keycap: cq.Workplane, top_w: float, top_h: float, 
                              top_thickness: float, x_radius: float, y_radius: float, 
-                             is_convex: bool) -> cq.Workplane:
+                             is_convex: bool, corner_radius: float = 0.0) -> cq.Workplane:
         """
         应用双方向弧面（使用两个圆柱面的交集实现平滑过渡）
         
         这种方法生成的曲面在X方向是圆弧，在Y方向也是圆弧，
         且能完整覆盖整个矩形顶面，过渡平滑无交叉痕迹
+        
+        参数:
+            corner_radius: 圆角半径，用于调整弧面的有效区域
         """
         try:
+            # 考虑圆角的影响：圆角会"吃掉"边缘区域，实际可用区域会变小
+            # 增加安全边距，确保弧面不会超出圆角后的实际顶面
+            # 使用更大的安全边距（0.2mm），因为圆角不仅减少尺寸，还改变了形状
+            safety_margin = 0.2
+            if corner_radius > 0:
+                effective_w = max(0.1, top_w - 2 * corner_radius - safety_margin)
+                effective_h = max(0.1, top_h - 2 * corner_radius - safety_margin)
+            else:
+                effective_w = top_w
+                effective_h = top_h
+            
             print(f"【双方向弧面】开始处理...")
-            print(f"【双方向弧面】顶面尺寸={top_w:.2f}x{top_h:.2f}mm")
+            print(f"【双方向弧面】原始尺寸={top_w:.2f}x{top_h:.2f}mm, 有效尺寸={effective_w:.2f}x{effective_h:.2f}mm（圆角={corner_radius:.2f}mm）")
             print(f"【双方向弧面】X半径={x_radius:.2f}mm, Y半径={y_radius:.2f}mm")
             
-            # 计算X方向弧面参数
-            chord_x_half = top_w / 2
+            # 计算X方向弧面参数（基于有效宽度）
+            chord_x_half = effective_w / 2
             h_x = sqrt(x_radius * x_radius - chord_x_half * chord_x_half)
             arc_height_x = x_radius - h_x
             
-            # 计算Y方向弧面参数
-            chord_y_half = top_h / 2
+            # 计算Y方向弧面参数（基于有效高度）
+            chord_y_half = effective_h / 2
             h_y = sqrt(y_radius * y_radius - chord_y_half * chord_y_half)
             arc_height_y = y_radius - h_y
             
@@ -643,27 +729,27 @@ class KeycapShape:
                 # Y方向圆柱：圆心在 Z = top_thickness - h_y，轴沿X方向
                 cylinder_y_center_z = top_thickness - h_y
                 
-                # 创建X方向圆柱（沿Y轴方向）
+                # 创建X方向圆柱（沿Y轴方向，使用有效高度）
                 cylinder_x = (cq.Workplane("XZ")
                              .workplane(offset=0)
                              .center(0, cylinder_x_center_z)
                              .circle(x_radius)
-                             .extrude(top_h * 2, both=True))
+                             .extrude(effective_h * 2, both=True))
                 
-                # 创建Y方向圆柱（沿X轴方向）
+                # 创建Y方向圆柱（沿X轴方向，使用有效宽度）
                 cylinder_y = (cq.Workplane("YZ")
                              .workplane(offset=0)
                              .center(0, cylinder_y_center_z)
                              .circle(y_radius)
-                             .extrude(top_w * 2, both=True))
+                             .extrude(effective_w * 2, both=True))
                 
                 # 取两个圆柱的交集 - 这会产生一个双曲面形状
                 curved_body = cylinder_x.intersect(cylinder_y)
                 
-                # 创建裁剪盒：只保留顶面范围内、Z > top_thickness 的部分
+                # 创建裁剪盒：只保留有效区域内、Z > top_thickness 的部分（考虑圆角）
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness)
-                           .rect(top_w, top_h)
+                           .rect(effective_w, effective_h)  # 使用有效尺寸
                            .extrude(total_arc_height + 0.5))
                 
                 # 取弧面体与裁剪盒的交集
@@ -671,7 +757,7 @@ class KeycapShape:
                 
                 # 将弧面部分添加到键帽上
                 keycap = keycap.union(curved_part)
-                print(f"【双方向弧面】凸起双曲面已添加")
+                print(f"【双方向弧面】凸起双曲面已添加（已考虑圆角影响）")
                 
             else:
                 # 凹陷模式：使用两个圆柱的并集来切割
@@ -681,7 +767,7 @@ class KeycapShape:
                 cylinder_y_center_z = top_thickness + h_y
                 
                 # 拉伸长度足够大以穿透侧面
-                extrude_length = max(top_w, top_h) * 2
+                extrude_length = max(effective_w, effective_h) * 2
                 
                 # 创建X方向圆柱
                 cylinder_x = (cq.Workplane("XZ")
@@ -700,10 +786,10 @@ class KeycapShape:
                 # 取两个圆柱的交集 - 凹陷部分
                 curved_body = cylinder_x.intersect(cylinder_y)
                 
-                # 创建裁剪盒：足够大以穿透侧面
+                # 创建裁剪盒：X和Y方向限制在有效区域内（考虑圆角），足够大以穿透侧面
                 clip_box = (cq.Workplane("XY")
                            .workplane(offset=top_thickness - total_arc_height - 0.5)
-                           .rect(extrude_length, extrude_length)
+                           .rect(effective_w, effective_h)  # 使用有效尺寸
                            .extrude(total_arc_height + 0.5))
                 
                 # 取弧面体与裁剪盒的交集
@@ -711,7 +797,7 @@ class KeycapShape:
                 
                 # 从键帽中减去弧面部分
                 keycap = keycap.cut(curved_part)
-                print(f"【双方向弧面】凹陷双曲面已减去")
+                print(f"【双方向弧面】凹陷双曲面已减去（已考虑圆角影响）")
             
             return keycap
             

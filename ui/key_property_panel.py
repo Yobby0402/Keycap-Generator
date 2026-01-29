@@ -518,10 +518,10 @@ class KeyPropertyPanel(QWidget):
         self.scheme_combo_single.blockSignals(True)
         self.scheme_combo_single.clear()
         self.scheme_combo_single.addItem(_scheme_preview_icon("#cccccc", "#000000"), t("自定义", "Custom"), None)
-        for i, (k, t) in enumerate(self._available_schemes):
+        for i, (k, txt) in enumerate(self._available_schemes):
             idx = self.scheme_combo_single.count()
-            self.scheme_combo_single.addItem(_scheme_preview_icon(k, t), " ", (k, t))
-            self.scheme_combo_single.setItemData(idx, f"按键 {k} / 文字 {t}", Qt.ToolTipRole)
+            self.scheme_combo_single.addItem(_scheme_preview_icon(k, txt), " ", (k, txt))
+            self.scheme_combo_single.setItemData(idx, f"按键 {k} / 文字 {txt}", Qt.ToolTipRole)
         self.scheme_combo_single.setCurrentIndex(0)
         self.scheme_combo_single.blockSignals(False)
     
