@@ -1831,8 +1831,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "导出成功", msg)
             else:
                 error_msg = "无法导出3MF文件。\n\n"
-                error_msg += "可能原因：缺少 trimesh 库\n"
-                error_msg += "解决方法：在终端运行 pip install trimesh"
+                error_msg += "常见原因：\n"
+                error_msg += "1. 未安装 trimesh → 终端运行: pip install trimesh\n"
+                error_msg += "2. 使用的是打包的 exe → exe 内可能未包含 trimesh。请用「python main.py」从源码运行（先 pip install trimesh），或重新打包前安装 trimesh 后再打包。"
                 QMessageBox.warning(self, "导出失败", error_msg)
     
     def show_settings(self):

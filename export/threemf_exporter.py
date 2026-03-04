@@ -89,8 +89,16 @@ def export_3mf(keycap_model: cq.Workplane,
         return True
         
     except ImportError as e:
-        print("错误: 需要安装 trimesh 库才能导出3MF格式")
-        print("请运行: pip install trimesh")
+        err = str(e).strip()
+        print("错误: 导出3MF需要 trimesh 及其依赖")
+        print(f"  具体原因: {e}")
+        if "networkx" in err:
+            print("  解决方法: 在终端运行 pip install networkx")
+        elif "lxml" in err:
+            print("  解决方法: 在终端运行 pip install lxml")
+        else:
+            print("  解决方法: 在终端运行 pip install trimesh")
+        print("  若使用打包的 exe，请用「python main.py」运行并安装上述依赖，或重新打包前先安装再打包。")
         return False
     except Exception as e:
         print(f"导出3MF文件时出错: {e}")
@@ -158,8 +166,16 @@ def export_3mf_batch(
             scene.export(filepath, file_type='3mf')
         print(f"3MF 批量（同色已合并，便于按耗材设置）已导出: {filepath}")
         return True
-    except ImportError:
-        print("错误: 需要安装 trimesh 库才能导出3MF格式")
+    except ImportError as e:
+        err = str(e).strip()
+        print("错误: 导出3MF需要 trimesh 及其依赖")
+        print(f"  具体原因: {e}")
+        if "networkx" in err:
+            print("  解决方法: pip install networkx")
+        elif "lxml" in err:
+            print("  解决方法: pip install lxml")
+        else:
+            print("  解决方法: pip install trimesh")
         return False
     except Exception as e:
         print(f"导出3MF批量时出错: {e}")

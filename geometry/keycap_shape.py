@@ -1016,12 +1016,6 @@ class KeycapShape:
         top_thickness = self.params.top_thickness
         wall_thickness = self.params.wall_thickness
         
-        # 卫星轴连接器参数
-        # 直径：根据按键宽度调整，但最小3.0mm，最大5.0mm（增大以便可见）
-        stabilizer_diameter = max(3.0, min(5.0, w * 0.08))
-        # 深度：向上延伸的深度，通常4-6mm（增大以便可见）
-        stabilizer_depth = 5.0  # 卫星轴连接器深度 (mm)
-        
         print(f"【卫星轴】按键尺寸: {w}x{h}mm, 深度: {d}mm, 顶面厚度: {top_thickness}mm")
         
         # 卫星轴连接器位置：在按键底部两侧，距离边缘一定距离
@@ -1054,14 +1048,30 @@ class KeycapShape:
         # 连接器深度：向下延伸的深度（和MX stem一样，向下延伸）
         
         print(f"【卫星轴】连接器位置: 左侧({left_x:.2f}, {center_y:.2f}), 右侧({right_x:.2f}, {center_y:.2f})")
-        print(f"【卫星轴】连接器Z范围: {stabilizer_start_z} 到 {stabilizer_start_z - stabilizer_depth}mm（向下延伸，和MX stem一样）")
-        print(f"【卫星轴】连接器参数: 直径={stabilizer_diameter:.2f}mm, 深度={stabilizer_depth}mm")
+        # 卫星轴圆柱直径、深度、十字尺寸：优先使用卫星轴专用参数，无则回退到计算值或十字轴参数
+        stabilizer_diameter = getattr(self.params, 'stabilizer_cylinder_diameter', None)
+        if stabilizer_diameter is None and hasattr(self.params, 'geometry'):
+            stabilizer_diameter = getattr(self.params.geometry, 'stabilizer_cylinder_diameter', None)
+        if stabilizer_diameter is None or stabilizer_diameter <= 0:
+            stabilizer_diameter = max(3.0, min(5.0, w * 0.08))
+        stabilizer_depth = getattr(self.params, 'stabilizer_depth', None)
+        if stabilizer_depth is None and hasattr(self.params, 'geometry'):
+            stabilizer_depth = getattr(self.params.geometry, 'stabilizer_depth', 5.0)
+        if stabilizer_depth is None or stabilizer_depth <= 0:
+            stabilizer_depth = 5.0
+        cross_width = getattr(self.params, 'stabilizer_cross_width', None)
+        if cross_width is None and hasattr(self.params, 'geometry'):
+            cross_width = getattr(self.params.geometry, 'stabilizer_cross_width', self.params.stem_cross_width)
+        if cross_width is None or cross_width <= 0:
+            cross_width = self.params.stem_cross_width
+        cross_length = getattr(self.params, 'stabilizer_cross_length', None)
+        if cross_length is None and hasattr(self.params, 'geometry'):
+            cross_length = getattr(self.params.geometry, 'stabilizer_cross_length', 4.0)
+        if cross_length is None or cross_length <= 0:
+            cross_length = min(getattr(self.params, 'stem_cross_length', 4.0), stabilizer_diameter * 0.6)
         
-        # 卫星轴连接器参数（和MX stem类似）
-        # 卫星轴连接器也需要十字形结构，但尺寸可能不同
-        # 使用和MX stem相同的十字形参数，或者使用较小的尺寸
-        cross_width = self.params.stem_cross_width  # 使用MX stem的十字宽度
-        cross_length = min(self.params.stem_cross_length, stabilizer_diameter * 0.6)  # 十字长度，不超过连接器直径的60%
+        print(f"【卫星轴】连接器Z范围: {stabilizer_start_z} 到 {stabilizer_start_z - stabilizer_depth}mm（向下延伸，和MX stem一样）")
+        print(f"【卫星轴】连接器参数: 直径={stabilizer_diameter:.2f}mm, 深度={stabilizer_depth}mm, 十字={cross_length:.2f}x{cross_width:.2f}mm")
         
         # 创建左侧卫星轴连接器空腔（圆柱形，从底部向下延伸，和MX stem一样）
         # 注意：这是空腔，用于容纳卫星轴杆，和MX stem连接器一样的逻辑

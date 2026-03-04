@@ -133,6 +133,15 @@ class BatchEditPanel(QWidget):
         wall_spin.valueChanged.connect(lambda v: self._on_geometry_changed('wall_thickness', v))
         self.geometry_layout.addRow(t("壁厚:", "Wall thickness:"), wall_spin)
         
+        # 顶面厚度
+        top_thickness_spin = QDoubleSpinBox()
+        top_thickness_spin.setRange(0.3, 5.0)
+        top_thickness_spin.setValue(getattr(geometry, 'top_thickness', 1.0))
+        top_thickness_spin.setDecimals(2)
+        top_thickness_spin.setSuffix(" mm")
+        top_thickness_spin.valueChanged.connect(lambda v: self._on_geometry_changed('top_thickness', v))
+        self.geometry_layout.addRow(t("顶面厚度:", "Top thickness:"), top_thickness_spin)
+        
         # 侧面斜角
         side_angle_spin = QDoubleSpinBox()
         side_angle_spin.setRange(0.0, 30.0)
@@ -203,6 +212,50 @@ class BatchEditPanel(QWidget):
         corner_radius_spin.valueChanged.connect(lambda v: self._on_geometry_changed('corner_radius', v))
         self.geometry_layout.addRow(t("圆角半径:", "Corner radius:"), corner_radius_spin)
         
+        # 连接器/十字轴设置
+        stem_enabled_check = QCheckBox(t("启用连接器", "Enable stem"))
+        stem_enabled_check.setChecked(getattr(geometry, 'stem_enabled', True))
+        stem_enabled_check.stateChanged.connect(lambda v: self._on_geometry_changed('stem_enabled', v == Qt.Checked))
+        self.geometry_layout.addRow(t("连接器:", "Stem:"), stem_enabled_check)
+        
+        stem_type_combo = QComboBox()
+        stem_type_combo.addItems(["MX", "Alps"])
+        stem_type_combo.setCurrentText(getattr(geometry, 'stem_type', "MX"))
+        stem_type_combo.currentTextChanged.connect(lambda text: self._on_geometry_changed('stem_type', text))
+        self.geometry_layout.addRow(t("轴体类型:", "Stem type:"), stem_type_combo)
+        
+        stem_height_spin = QDoubleSpinBox()
+        stem_height_spin.setRange(1.0, 10.0)
+        stem_height_spin.setValue(getattr(geometry, 'stem_height', 4.0))
+        stem_height_spin.setDecimals(1)
+        stem_height_spin.setSuffix(" mm")
+        stem_height_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stem_height', v))
+        self.geometry_layout.addRow(t("连接器深度:", "Stem depth:"), stem_height_spin)
+        
+        stem_cylinder_spin = QDoubleSpinBox()
+        stem_cylinder_spin.setRange(3.0, 10.0)
+        stem_cylinder_spin.setValue(getattr(geometry, 'stem_cylinder_diameter', 5.4))
+        stem_cylinder_spin.setDecimals(1)
+        stem_cylinder_spin.setSuffix(" mm")
+        stem_cylinder_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stem_cylinder_diameter', v))
+        self.geometry_layout.addRow(t("圆柱直径:", "Cylinder diameter:"), stem_cylinder_spin)
+        
+        stem_cross_width_spin = QDoubleSpinBox()
+        stem_cross_width_spin.setRange(0.5, 3.0)
+        stem_cross_width_spin.setValue(getattr(geometry, 'stem_cross_width', 1.3))
+        stem_cross_width_spin.setDecimals(1)
+        stem_cross_width_spin.setSuffix(" mm")
+        stem_cross_width_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stem_cross_width', v))
+        self.geometry_layout.addRow(t("十字轴宽度:", "Stem cross width:"), stem_cross_width_spin)
+        
+        stem_cross_length_spin = QDoubleSpinBox()
+        stem_cross_length_spin.setRange(2.0, 8.0)
+        stem_cross_length_spin.setValue(getattr(geometry, 'stem_cross_length', 4.0))
+        stem_cross_length_spin.setDecimals(1)
+        stem_cross_length_spin.setSuffix(" mm")
+        stem_cross_length_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stem_cross_length', v))
+        self.geometry_layout.addRow(t("十字轴长度:", "Stem cross length:"), stem_cross_length_spin)
+        
         # 卫星轴设置（QCheckBox/QComboBox 已在文件顶部导入）
         stabilizer_enabled_check = QCheckBox(t("启用卫星轴连接器", "Enable stabilizer"))
         stabilizer_enabled_check.setChecked(getattr(geometry, 'stabilizer_enabled', False))
@@ -226,6 +279,38 @@ class BatchEditPanel(QWidget):
         # 当长度改变时，如果与预设值不匹配，切换到"自定义"
         stabilizer_length_spin.valueChanged.connect(lambda v: self._update_stabilizer_type_combo(stabilizer_type_combo, v))
         self.geometry_layout.addRow(t("卫星轴长度:", "Stabilizer length:"), stabilizer_length_spin)
+        
+        stabilizer_cross_width_spin = QDoubleSpinBox()
+        stabilizer_cross_width_spin.setRange(0.5, 3.0)
+        stabilizer_cross_width_spin.setValue(getattr(geometry, 'stabilizer_cross_width', 1.3))
+        stabilizer_cross_width_spin.setDecimals(1)
+        stabilizer_cross_width_spin.setSuffix(" mm")
+        stabilizer_cross_width_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stabilizer_cross_width', v))
+        self.geometry_layout.addRow(t("卫星轴十字宽度:", "Stabilizer cross width:"), stabilizer_cross_width_spin)
+        
+        stabilizer_cross_length_spin = QDoubleSpinBox()
+        stabilizer_cross_length_spin.setRange(2.0, 8.0)
+        stabilizer_cross_length_spin.setValue(getattr(geometry, 'stabilizer_cross_length', 4.0))
+        stabilizer_cross_length_spin.setDecimals(1)
+        stabilizer_cross_length_spin.setSuffix(" mm")
+        stabilizer_cross_length_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stabilizer_cross_length', v))
+        self.geometry_layout.addRow(t("卫星轴十字长度:", "Stabilizer cross length:"), stabilizer_cross_length_spin)
+        
+        stabilizer_cylinder_spin = QDoubleSpinBox()
+        stabilizer_cylinder_spin.setRange(2.0, 8.0)
+        stabilizer_cylinder_spin.setValue(getattr(geometry, 'stabilizer_cylinder_diameter', 4.0))
+        stabilizer_cylinder_spin.setDecimals(1)
+        stabilizer_cylinder_spin.setSuffix(" mm")
+        stabilizer_cylinder_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stabilizer_cylinder_diameter', v))
+        self.geometry_layout.addRow(t("卫星轴圆柱直径:", "Stabilizer cylinder diameter:"), stabilizer_cylinder_spin)
+        
+        stabilizer_depth_spin = QDoubleSpinBox()
+        stabilizer_depth_spin.setRange(2.0, 12.0)
+        stabilizer_depth_spin.setValue(getattr(geometry, 'stabilizer_depth', 5.0))
+        stabilizer_depth_spin.setDecimals(1)
+        stabilizer_depth_spin.setSuffix(" mm")
+        stabilizer_depth_spin.valueChanged.connect(lambda v: self._on_geometry_changed('stabilizer_depth', v))
+        self.geometry_layout.addRow(t("卫星轴连接器深度:", "Stabilizer depth:"), stabilizer_depth_spin)
         
         # 初始化类型选择
         current_length = getattr(geometry, 'stabilizer_length', 50.0)

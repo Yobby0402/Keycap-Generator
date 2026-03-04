@@ -149,6 +149,18 @@ python main.py
   - **按按键分文件**：每个键单独一组 STL/STEP 文件（适合单独打印）
   - **合并**：整盘合并为一个（或键帽/文字各一个）文件；若选 **3MF**，同色键帽、同色文字会各并为一个 mesh，便于在切片软件里按对象分配耗材（多色打印的终极解决方案）
 
+##### 5. 键帽高度（深度）的优先级说明
+
+键帽的「高度」在程序里对应**键帽深度**（从键帽顶面到底部的竖直尺寸，单位 mm），有两处可以设置：
+
+| 设置位置 | 含义 |
+|----------|------|
+| **键盘参数** 页 | 每种按键类型有一个 **「深度」**，作为该类型键帽的默认高度 |
+| **键盘设计** 页 | 下方有 **「各行高度设置」** 表格，可按 KLE 的**行（y 坐标）**为每一行单独指定高度；需勾选 **「使用高度类型（覆盖单个按键的高度设置）」** 后才会生效 |
+
+**最终采用规则**：生成预览或导出时，若已勾选「使用高度类型」且当前按键所在行在「各行高度设置」表格中有设置值，则**使用该行的行高度**（键盘设计里的设置）；否则使用**该按键类型在键盘参数里配置的深度**。  
+即：**键盘设计中的行高度会覆盖键盘参数中的深度**，便于按行做阶梯高度（如 R1～R4 不同高度）。
+
 #### 三、键盘参数（按类型统一配置）
 
 1. 打开 **「键盘参数」** 标签页
@@ -371,6 +383,17 @@ If you want to print a keyboard from scratch, here's the best approach:
 - Click **"Export All…"**, select directory and export method:
   - **Separate by Key**: Each key as separate STL/STEP files (suitable for separate printing)
   - **Merge**: Full keyboard merged into one (or keycap/text each as one) file; if selecting **3MF**, same-color keycaps and same-color text are each merged into one mesh for easy material assignment by object in slicer (ultimate solution for multi-color printing)
+
+##### 5. Keycap Height (Depth) Priority
+
+Keycap "height" in the program is **keycap depth** (vertical size from top to bottom, in mm). It can be set in two places:
+
+| Where | Meaning |
+|-------|--------|
+| **Keyboard Parameters** tab | Each key type has a **"Depth"** field, used as the default keycap height for that type |
+| **Keyboard Design** tab | The **"Row heights"** table lets you set a height per **row** (KLE y coordinate). The option **"Use height profile (override per-key height)"** must be checked for these values to apply |
+
+**Final rule**: When generating preview or exporting, if "Use height profile" is enabled and the current key's row has a value in the row heights table, that **row height** (from Keyboard Design) is used; otherwise the **depth** for that key type (from Keyboard Parameters) is used. So **row heights override per-type depth**, which is useful for row-dependent heights (e.g. R1–R4).
 
 #### III. Keyboard Parameters (Unified Configuration by Type)
 

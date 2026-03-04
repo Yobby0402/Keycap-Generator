@@ -6,3 +6,9 @@ fonttools>=4.28.0
 shapely>=2.0.0
 opencv-python>=4.5.0
 Pillow>=9.0.0
+
+# 3MF 导出（多色打印）可选依赖：trimesh 及其依赖
+# pip install trimesh 或单独: pip install networkx lxml
+trimesh>=4.0.0
+networkx>=2.5
+lxml>=4.5.0

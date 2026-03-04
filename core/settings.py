@@ -4,6 +4,8 @@
 """
 import json
 import os
+import sys
+import shutil
 from pathlib import Path
 from typing import Any, Dict
 
@@ -12,7 +14,22 @@ class Settings:
     """设置管理类"""
     
     def __init__(self, config_file: str = "config.json"):
-        self.config_file = config_file
+        # 支持PyInstaller打包后的路径
+        if getattr(sys, 'frozen', False):
+            # 打包后的exe环境：config.json保存在exe所在目录
+            exe_dir = os.path.dirname(sys.executable)
+            self.config_file = os.path.join(exe_dir, config_file)
+            # 如果exe目录下没有config.json，尝试从资源中复制
+            if not os.path.exists(self.config_file):
+                # 尝试从临时资源目录复制
+                if hasattr(sys, '_MEIPASS'):
+                    resource_config = os.path.join(sys._MEIPASS, config_file)
+                    if os.path.exists(resource_config):
+                        shutil.copy2(resource_config, self.config_file)
+        else:
+            # 开发环境：使用当前目录
+            self.config_file = config_file
+        
         self.settings: Dict[str, Any] = {}
         self.load()
     
@@ -54,6 +71,29 @@ class Settings:
                 "text_height_step": 0.1,
                 "default_text_depth": 0.5,
                 "text_depth_step": 0.05,
+                # 连接器/十字轴默认参数
+                "default_stem_cross_width": 1.3,
+                "default_stem_cross_length": 4.0,
+                "default_stem_height": 4.0,
+                "default_stem_cylinder_diameter": 5.4,
+                "default_stem_enabled": True,
+                "default_stem_type": "MX",
+                "default_top_thickness": 1.0,
+                "default_corner_radius": 0.5,
+                # 弧面默认
+                "default_curved_top_enabled": False,
+                "default_curved_top_x_enabled": False,
+                "default_curved_top_y_enabled": False,
+                "default_curved_top_x_radius": 90.0,
+                "default_curved_top_y_radius": 90.0,
+                "default_curved_top_direction": "convex",
+                # 卫星轴默认
+                "default_stabilizer_enabled": False,
+                "default_stabilizer_length": 50.0,
+                "default_stabilizer_cross_width": 1.3,
+                "default_stabilizer_cross_length": 4.0,
+                "default_stabilizer_cylinder_diameter": 4.0,
+                "default_stabilizer_depth": 5.0,
             }
             self.save()
     
@@ -230,6 +270,126 @@ class Settings:
 
     def set_text_depth_step(self, step: float):
         self.set("text_depth_step", step)
+
+    def get_default_stem_cross_width(self) -> float:
+        return self.get("default_stem_cross_width", 1.3)
+
+    def set_default_stem_cross_width(self, v: float):
+        self.set("default_stem_cross_width", v)
+
+    def get_default_stem_cross_length(self) -> float:
+        return self.get("default_stem_cross_length", 4.0)
+
+    def set_default_stem_cross_length(self, v: float):
+        self.set("default_stem_cross_length", v)
+
+    def get_default_stem_height(self) -> float:
+        return self.get("default_stem_height", 4.0)
+
+    def set_default_stem_height(self, v: float):
+        self.set("default_stem_height", v)
+
+    def get_default_stem_cylinder_diameter(self) -> float:
+        return self.get("default_stem_cylinder_diameter", 5.4)
+
+    def set_default_stem_cylinder_diameter(self, v: float):
+        self.set("default_stem_cylinder_diameter", v)
+
+    def get_default_stem_enabled(self) -> bool:
+        return self.get("default_stem_enabled", True)
+
+    def set_default_stem_enabled(self, v: bool):
+        self.set("default_stem_enabled", v)
+
+    def get_default_top_thickness(self) -> float:
+        return self.get("default_top_thickness", 1.0)
+
+    def set_default_top_thickness(self, v: float):
+        self.set("default_top_thickness", v)
+
+    def get_default_stem_type(self) -> str:
+        return self.get("default_stem_type", "MX")
+
+    def set_default_stem_type(self, v: str):
+        self.set("default_stem_type", v)
+
+    def get_default_corner_radius(self) -> float:
+        return self.get("default_corner_radius", 0.5)
+
+    def set_default_corner_radius(self, v: float):
+        self.set("default_corner_radius", v)
+
+    def get_default_curved_top_enabled(self) -> bool:
+        return self.get("default_curved_top_enabled", False)
+
+    def set_default_curved_top_enabled(self, v: bool):
+        self.set("default_curved_top_enabled", v)
+
+    def get_default_curved_top_x_enabled(self) -> bool:
+        return self.get("default_curved_top_x_enabled", False)
+
+    def set_default_curved_top_x_enabled(self, v: bool):
+        self.set("default_curved_top_x_enabled", v)
+
+    def get_default_curved_top_y_enabled(self) -> bool:
+        return self.get("default_curved_top_y_enabled", False)
+
+    def set_default_curved_top_y_enabled(self, v: bool):
+        self.set("default_curved_top_y_enabled", v)
+
+    def get_default_curved_top_x_radius(self) -> float:
+        return self.get("default_curved_top_x_radius", 90.0)
+
+    def set_default_curved_top_x_radius(self, v: float):
+        self.set("default_curved_top_x_radius", v)
+
+    def get_default_curved_top_y_radius(self) -> float:
+        return self.get("default_curved_top_y_radius", 90.0)
+
+    def set_default_curved_top_y_radius(self, v: float):
+        self.set("default_curved_top_y_radius", v)
+
+    def get_default_curved_top_direction(self) -> str:
+        return self.get("default_curved_top_direction", "convex")
+
+    def set_default_curved_top_direction(self, v: str):
+        self.set("default_curved_top_direction", v)
+
+    def get_default_stabilizer_enabled(self) -> bool:
+        return self.get("default_stabilizer_enabled", False)
+
+    def set_default_stabilizer_enabled(self, v: bool):
+        self.set("default_stabilizer_enabled", v)
+
+    def get_default_stabilizer_length(self) -> float:
+        return self.get("default_stabilizer_length", 50.0)
+
+    def set_default_stabilizer_length(self, v: float):
+        self.set("default_stabilizer_length", v)
+
+    def get_default_stabilizer_cross_width(self) -> float:
+        return self.get("default_stabilizer_cross_width", 1.3)
+
+    def set_default_stabilizer_cross_width(self, v: float):
+        self.set("default_stabilizer_cross_width", v)
+
+    def get_default_stabilizer_cross_length(self) -> float:
+        return self.get("default_stabilizer_cross_length", 4.0)
+
+    def set_default_stabilizer_cross_length(self, v: float):
+        self.set("default_stabilizer_cross_length", v)
+
+    def get_default_stabilizer_cylinder_diameter(self) -> float:
+        return self.get("default_stabilizer_cylinder_diameter", 4.0)
+
+    def set_default_stabilizer_cylinder_diameter(self, v: float):
+        self.set("default_stabilizer_cylinder_diameter", v)
+
+    def get_default_stabilizer_depth(self) -> float:
+        return self.get("default_stabilizer_depth", 5.0)
+
+    def set_default_stabilizer_depth(self, v: float):
+        self.set("default_stabilizer_depth", v)
     
     # 旧圆角默认参数已移除（改为边缘形状设置）
     

@@ -48,12 +48,16 @@ class KeycapGeometry:
     stem_enabled: bool = True    # 是否生成连接器
     stem_height: float = 4.0     # 连接器深度 (mm)
     stem_cylinder_diameter: float = 5.4  # 圆柱直径 (mm)
-    stem_cross_width: float = 1.0  # 十字宽度 (mm)
+    stem_cross_width: float = 1.3  # 十字宽度 (mm)，1.3 便于安装
     stem_cross_length: float = 4.0  # 十字长度 (mm)
     
     # 卫星轴参数（用于长按键，如空格键、Shift等）
     stabilizer_enabled: bool = False  # 是否添加卫星轴连接器
     stabilizer_length: float = 50.0   # 卫星轴长度 (mm)，通常为按键宽度的2-3倍
+    stabilizer_cross_width: float = 1.3   # 卫星轴十字宽度 (mm)，与十字轴一致便于安装
+    stabilizer_cross_length: float = 4.0   # 卫星轴十字长度 (mm)
+    stabilizer_cylinder_diameter: float = 4.0  # 卫星轴圆柱直径 (mm)
+    stabilizer_depth: float = 5.0   # 卫星轴连接器深度 (mm)
     
     # 弧面参数
     curved_top_enabled: bool = False  # 是否启用弧面
@@ -298,6 +302,42 @@ class KeycapDesign:
             setattr(self.geometry, 'stabilizer_length', v)
         else:
             self.geometry.stabilizer_length = v
+    
+    @property
+    def stabilizer_cross_width(self): return getattr(self.geometry, 'stabilizer_cross_width', 1.3)
+    @stabilizer_cross_width.setter
+    def stabilizer_cross_width(self, v): 
+        if not hasattr(self.geometry, 'stabilizer_cross_width'):
+            setattr(self.geometry, 'stabilizer_cross_width', v)
+        else:
+            self.geometry.stabilizer_cross_width = v
+    
+    @property
+    def stabilizer_cross_length(self): return getattr(self.geometry, 'stabilizer_cross_length', 4.0)
+    @stabilizer_cross_length.setter
+    def stabilizer_cross_length(self, v): 
+        if not hasattr(self.geometry, 'stabilizer_cross_length'):
+            setattr(self.geometry, 'stabilizer_cross_length', v)
+        else:
+            self.geometry.stabilizer_cross_length = v
+    
+    @property
+    def stabilizer_cylinder_diameter(self): return getattr(self.geometry, 'stabilizer_cylinder_diameter', 4.0)
+    @stabilizer_cylinder_diameter.setter
+    def stabilizer_cylinder_diameter(self, v): 
+        if not hasattr(self.geometry, 'stabilizer_cylinder_diameter'):
+            setattr(self.geometry, 'stabilizer_cylinder_diameter', v)
+        else:
+            self.geometry.stabilizer_cylinder_diameter = v
+    
+    @property
+    def stabilizer_depth(self): return getattr(self.geometry, 'stabilizer_depth', 5.0)
+    @stabilizer_depth.setter
+    def stabilizer_depth(self, v): 
+        if not hasattr(self.geometry, 'stabilizer_depth'):
+            setattr(self.geometry, 'stabilizer_depth', v)
+        else:
+            self.geometry.stabilizer_depth = v
     
     # 弧面参数兼容
     @property

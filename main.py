@@ -14,7 +14,14 @@ def main():
     app.setApplicationName("机械键盘按键模型生成器")
     
     # 设置应用图标（键帽.png）
-    _dir = os.path.dirname(os.path.abspath(__file__))
+    # 支持PyInstaller打包后的资源路径
+    if getattr(sys, 'frozen', False):
+        # 打包后的exe环境
+        _dir = sys._MEIPASS
+    else:
+        # 开发环境
+        _dir = os.path.dirname(os.path.abspath(__file__))
+    
     icon_path = os.path.join(_dir, "键帽.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
